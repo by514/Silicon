@@ -3,6 +3,7 @@ package silicon.world.blocks.container;
 import arc.Core;
 import arc.graphics.g2d.Draw;
 import arc.graphics.g2d.TextureRegion;
+import mindustry.Vars;
 import mindustry.gen.Building;
 import mindustry.type.Liquid;
 import mindustry.world.blocks.liquid.LiquidBlock;
@@ -100,7 +101,8 @@ public class DualPurposeStorager extends StorageBlock {
             // 1. 底座贴图
             Draw.rect(DualPurposeStorager.this.bottomRegion, x, y);
             // 2. 有液体时绘制流动液面（白色条纹滚动 + 液体颜色）
-            if (liquids.currentAmount() > LIQUID_THRESHOLD) {
+            //    drawTiledFrames 依赖 Vars.renderer.fluidFrames（仅客户端可用），null 时跳过
+            if (liquids.currentAmount() > LIQUID_THRESHOLD && Vars.renderer != null) {
                 Liquid liq = liquids.current();
                 if (liq != null) {
                     LiquidBlock.drawTiledFrames(size, x, y, DualPurposeStorager.this.liquidPadding, liq,
