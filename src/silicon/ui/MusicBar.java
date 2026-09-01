@@ -133,9 +133,15 @@ public class MusicBar {
             albumBtn.getLabel().setWrap(false);
             albumBtn.getLabel().setEllipsis(true);
             albumBtn.setColor(Pal.accent);
+            final String[] lastScope = {albumScopeLabel()};
+            albumBtn.update(() -> {
+                String lbl = albumScopeLabel();
+                if (!lastScope[0].equals(lbl)) { lastScope[0] = lbl; albumBtn.setText(lbl); }
+            });
             albumBtn.clicked(() -> {
                 cycleAlbumScope();
-                albumBtn.setText(albumScopeLabel());
+                lastScope[0] = albumScopeLabel();
+                albumBtn.setText(lastScope[0]);
             });
             bar.add(albumBtn).growX().width(Scl.scl(96f)).pad(1f);
 
