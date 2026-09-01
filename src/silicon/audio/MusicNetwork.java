@@ -410,6 +410,7 @@ public class MusicNetwork {
             // 建接收缓冲与缓存文件（先写占位）
             ChunkRecv r = new ChunkRecv();
             r.hash = hash;
+            r.ext = ext;
             r.chunkCount = chunks;
             r.received = new boolean[chunks];
             r.total = chunks;
@@ -446,18 +447,19 @@ public class MusicNetwork {
             }
             if (idx < 0 || idx >= r.received.length || r.received[idx]) return;
 
-            // 追加写缓存：reliable 包有序，按到达顺序 append
-            Fi file = MusicPlayer.cacheFileForHash(hash);
-            if (!file.exists()) file.write(false).close();
-            try (java.io.OutputStream out = file.write(true)) {
+            // 追加写暂存文件：reliable 包有序，按到达顺序 append；未收齐前不视为正式缓存
+            Fi staging = MusicPlayer.stagingFile(hash);
+            if (idx == 0 || !staging.exists()) staging.write(false).close(); // 首块/不存在时截断，避免旧残留
+            try (java.io.OutputStream out = staging.write(true)) {
                 out.write(chunk);
             }
             r.received[idx] = true;
             r.receivedCount++;
 
             if (r.receivedCount >= r.received.length) {
-                // 收齐 → 移除临时记录，尝试按 owner 播放
+                // 收齐 → 把暂存文件 moveTo 转正式缓存，再尝试按 owner 播放
                 recvRemoveByHash(hash);
+                MusicPlayer.finalizeCache(hash, r.ext);
                 String owner = ownerOfHash(hash);
                 if (owner != null && !isSelf(owner)) {
                     float[] pos = ownerPos.get(owner);
@@ -585,6 +587,7 @@ public class MusicNetwork {
 
     private static class ChunkRecv {
         String hash;
+        String ext;
         int chunkCount;
         int total;
         boolean[] received;

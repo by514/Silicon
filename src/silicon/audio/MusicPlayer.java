@@ -532,6 +532,27 @@ public class MusicPlayer {
         return Core.files.cache(CACHE_DIR + hash + normalizeExt(ext));
     }
 
+    /** 分块接收暂存文件（未收齐前不视为正式缓存，防止半截文件被当作有效缓存） */
+    public static Fi stagingFile(String hash) {
+        return Core.files.cache(CACHE_DIR + hash + ".part");
+    }
+
+    /** 分块全部收齐后：把暂存文件重命名为正式缓存 `<hash>.<ext>` 并登记扩展名 */
+    public static boolean finalizeCache(String hash, String ext) {
+        try {
+            String e = (ext == null || ext.isEmpty()) ? resolveExt(hash) : normalizeExt(ext);
+            Fi staging = stagingFile(hash);
+            if (staging == null || !staging.exists()) return false;
+            Fi finalFile = cacheFileForHash(hash, e);
+            staging.moveTo(finalFile);
+            hashExt.put(hash, e);
+            return finalFile.exists();
+        } catch (Exception ex) {
+            SiliconLog.log("Cache finalize fail " + hash + ": " + ex.getMessage());
+            return false;
+        }
+    }
+
     /** 解析 hash 对应缓存文件的真实扩展名：优先已登记/已知，否则扫缓存目录 `<hash>.*`（跨重启命中） */
     private static String resolveExt(String hash) {
         if (hash == null || hash.isEmpty()) return null;
@@ -542,6 +563,7 @@ public class MusicPlayer {
             Fi dir = Core.files.cache(CACHE_DIR);
             if (dir != null && dir.isDirectory()) {
                 for (Fi f : dir.list()) {
+                    if (f != null && "part".equalsIgnoreCase(f.extension())) continue; // 跳过未完成的分块暂存文件
                     if (f != null && f.nameWithoutExtension().equals(hash)) {
                         String e = f.extension();
                         String ext = (e == null || e.isEmpty()) ? ".ogg" : ("." + e.toLowerCase());
@@ -591,20 +613,6 @@ public class MusicPlayer {
             return true;
         } catch (Exception e) {
             SiliconLog.log("Cache write fail " + hash + ": " + e.getMessage());
-            return false;
-        }
-    }
-
-    /** 从输入流写缓存（URL 分块下载用） */
-    static boolean writeCacheStream(String hash, InputStream in) {
-        try {
-            Fi file = cacheFileForHash(hash);
-            try (InputStream src = in; OutputStream out = file.write(false)) {
-                Streams.copy(src, out);
-            }
-            return true;
-        } catch (Exception e) {
-            SiliconLog.log("Cache stream fail " + hash + ": " + e.getMessage());
             return false;
         }
     }
