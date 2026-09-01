@@ -48,32 +48,50 @@ public class MusicPlayerDialog extends BaseDialog {
         cont.clearChildren();
         cont.top();
 
-        // —— 顶部「现在播放」面板 ——
+        // —— 顶部「现在播放」面板（实时刷新：状态/曲名随播放变化自动更新） ——
         cont.table(now -> {
             now.background(Styles.grayPanel);
             now.margin(12f);
             now.defaults().top();
 
             // 左侧：状态图标圆盘
-            now.table(disc -> {
-                disc.background(Styles.grayPanelDark);
-                disc.margin(9f);
-                disc.image(MusicPlayer.isPlaying() ? Icon.pause : Icon.play)
-                        .size(Scl.scl(24f)).color(MusicPlayer.isPlaying() ? Pal.accent : Color.lightGray);
+            final arc.scene.ui.Image[] disc = new arc.scene.ui.Image[1];
+            now.table(d -> {
+                d.background(Styles.grayPanelDark);
+                d.margin(9f);
+                disc[0] = new arc.scene.ui.Image(MusicPlayer.isPlaying() ? Icon.pause : Icon.play);
+                disc[0].setSize(Scl.scl(24f));
+                disc[0].setColor(MusicPlayer.isPlaying() ? Pal.accent : Color.lightGray);
+                d.add(disc[0]).size(Scl.scl(24f)).color(MusicPlayer.isPlaying() ? Pal.accent : Color.lightGray);
             }).padRight(14f);
 
             // 右侧：状态标题 + 曲名
+            final arc.scene.ui.Label[] stateLbl = new arc.scene.ui.Label[1];
+            final arc.scene.ui.Label[] nameLbl = new arc.scene.ui.Label[1];
             now.table(info -> {
                 info.defaults().left();
-                info.add(MusicPlayer.isPlaying()
+                stateLbl[0] = new arc.scene.ui.Label(MusicPlayer.isPlaying()
                                 ? Core.bundle.get("musicplayer.playing")
-                                : Core.bundle.get("musicplayer.play"))
-                        .style(Styles.outlineLabel)
-                        .color(MusicPlayer.isPlaying() ? Pal.accent : Color.lightGray);
+                                : Core.bundle.get("musicplayer.play"),
+                        Styles.outlineLabel);
+                stateLbl[0].setColor(MusicPlayer.isPlaying() ? Pal.accent : Color.lightGray);
+                info.add(stateLbl[0]);
                 info.row();
-                info.add(nowPlayingLabel()).growX().width(Scl.scl(280f))
-                        .style(Styles.outlineLabel).color(MusicPlayer.isPlaying() ? Color.white : Color.lightGray);
+                nameLbl[0] = new arc.scene.ui.Label(nowPlayingLabel(), Styles.outlineLabel);
+                nameLbl[0].setColor(MusicPlayer.isPlaying() ? Color.white : Color.lightGray);
+                nameLbl[0].setEllipsis(true);
+                info.add(nameLbl[0]).growX().width(Scl.scl(280f));
             }).growX();
+            // 每帧刷新状态与曲名（悬浮条/自动推进切换曲目时这里也跟着变）
+            now.update(() -> {
+                boolean playing = MusicPlayer.isPlaying();
+                disc[0].setDrawable(playing ? Icon.pause : Icon.play);
+                disc[0].setColor(playing ? Pal.accent : Color.lightGray);
+                stateLbl[0].setText(playing ? Core.bundle.get("musicplayer.playing") : Core.bundle.get("musicplayer.play"));
+                stateLbl[0].setColor(playing ? Pal.accent : Color.lightGray);
+                nameLbl[0].setText(nowPlayingLabel());
+                nameLbl[0].setColor(playing ? Color.white : Color.lightGray);
+            });
         }).growX().padBottom(8f).row();
 
         // —— 播放进度条（可拖动选进度） ——
@@ -135,14 +153,16 @@ public class MusicPlayerDialog extends BaseDialog {
             albumsFilter.add(Core.bundle.get("musicplayer.album") + ":").left().padRight(4f);
             // 「全部曲目」按钮
             TextButton all = new TextButton(Core.bundle.get("musicplayer.allAlbums"), Styles.flatBordert);
+            all.getLabel().setWrap(false);
             all.update(() -> all.setColor(filterAlbum == null ? Pal.accent : Color.lightGray));
             all.clicked(() -> { filterAlbum = null; rebuildRows(); });
-            albumsFilter.add(all).width(Scl.scl(96f)).height(Scl.scl(30f)).pad(1f);
+            albumsFilter.add(all).width(Scl.scl(100f)).height(Scl.scl(30f)).pad(1f);
             Seq<MusicPlayer.Album> albums = MusicPlayer.albums();
             for (int i = 0; i < albums.size; i++) {
                 MusicPlayer.Album a = albums.get(i);
                 final String name = a.name;
                 TextButton b = new TextButton(a.name, Styles.flatBordert);
+                b.getLabel().setWrap(false);
                 b.getLabel().setEllipsis(true);
                 b.update(() -> b.setColor(name.equals(filterAlbum) ? Pal.accent : Color.white));
                 b.clicked(() -> { filterAlbum = name; rebuildRows(); });
@@ -158,7 +178,7 @@ public class MusicPlayerDialog extends BaseDialog {
             albumsFilter.add(delAlbum).size(Scl.scl(30f)).padLeft(2f);
         }).growX().padTop(6f).row();
 
-        // —— 音量 / 音高（两个并排面板：各带数值显示，减小左右留白） ——
+        // —— 音量 / 音高 / 倍速（三个并排面板合为一行） ——
         cont.table(analog -> {
             analog.defaults().pad(2f);
             // 音量面板
@@ -166,55 +186,57 @@ public class MusicPlayerDialog extends BaseDialog {
                 vp.background(Styles.grayPanel);
                 vp.margin(6f);
                 vp.defaults().pad(2f);
-                vp.add(Core.bundle.get("musicplayer.volume")).left().width(Scl.scl(50f));
+                vp.add(Core.bundle.get("musicplayer.volume")).left().width(Scl.scl(42f));
                 Slider vol = new Slider(0f, 1f, 0.05f, false);
                 vol.setValue(MusicPlayer.volume());
                 final arc.scene.ui.Label volVal = new arc.scene.ui.Label(Math.round(MusicPlayer.volume() * 100) + "%", Styles.outlineLabel);
                 volVal.setColor(Color.white);
-                vol.update(() -> volVal.setText(Math.round(vol.getValue() * 100) + "%"));
+                vol.update(() -> {
+                    if (!vol.isDragging() && Math.abs(vol.getValue() - MusicPlayer.volume()) > 0.01f) vol.setValue(MusicPlayer.volume());
+                    volVal.setText(Math.round(vol.getValue() * 100) + "%");
+                });
                 vol.changed(() -> MusicPlayer.setVolume(vol.getValue()));
-                vp.add(vol).growX().width(Scl.scl(150f));
-                vp.add(volVal).width(Scl.scl(40f)).right().padLeft(4f);
+                vp.add(vol).growX().width(Scl.scl(120f));
+                vp.add(volVal).width(Scl.scl(36f)).right().padLeft(4f);
             }).growX();
-            analog.add().width(Scl.scl(8f));
             // 音高面板
             analog.table(pp -> {
                 pp.background(Styles.grayPanel);
                 pp.margin(6f);
                 pp.defaults().pad(2f);
-                pp.add(Core.bundle.get("musicplayer.pitch")).left().width(Scl.scl(50f));
+                pp.add(Core.bundle.get("musicplayer.pitch")).left().width(Scl.scl(42f));
                 Slider pit = new Slider(0.5f, 2f, 0.05f, false);
                 pit.setValue(MusicPlayer.pitch());
-                final arc.scene.ui.Label pitVal = new arc.scene.ui.Label(MusicPlayer.pitch() + "x", Styles.outlineLabel);
+                final arc.scene.ui.Label pitVal = new arc.scene.ui.Label(String.format("%.2fx", MusicPlayer.pitch()), Styles.outlineLabel);
                 pitVal.setColor(Color.white);
-                pit.update(() -> pitVal.setText(String.format("%.2fx", pit.getValue())));
+                pit.update(() -> {
+                    if (!pit.isDragging() && Math.abs(pit.getValue() - MusicPlayer.pitch()) > 0.01f) pit.setValue(MusicPlayer.pitch());
+                    pitVal.setText(String.format("%.2fx", pit.getValue()));
+                });
                 pit.changed(() -> MusicPlayer.setPitch(pit.getValue()));
-                pp.add(pit).growX().width(Scl.scl(150f));
-                pp.add(pitVal).width(Scl.scl(60f)).right().padLeft(4f);
+                pp.add(pit).growX().width(Scl.scl(120f));
+                pp.add(pitVal).width(Scl.scl(42f)).right().padLeft(4f);
             }).growX();
-        }).growX().padTop(2f).row();
-
-        // —— 倍速（面板：对数滑杆 0.1–16x） ——
-        cont.table(speedRow -> {
-            speedRow.background(Styles.grayPanel);
-            speedRow.margin(6f);
-            speedRow.defaults().pad(2f);
-            speedRow.add(Core.bundle.get("musicplayer.speed")).left().width(Scl.scl(50f));
-            // 倍速滑杆（对数 0.1–16x）：cursor 0..1 映射 speed = 0.1 * 160^cursor
-            Slider sp = new Slider(0f, 1f, 0.001f, false);
-            sp.setValue(speedToCursor(MusicPlayer.speed()));
-            final arc.scene.ui.Label spVal = new arc.scene.ui.Label(formatSpeed(MusicPlayer.speed()), Styles.outlineLabel);
-            spVal.setColor(Color.white);
-            sp.update(() -> {
-                if (!sp.isDragging() && Math.abs(cursorToSpeed(sp.getValue()) - MusicPlayer.speed()) > 0.001f) {
-                    // 外部改动（如持久化/悬浮条）时回写滑杆，避免指针漂移
-                    sp.setValue(speedToCursor(MusicPlayer.speed()));
-                }
-                spVal.setText(formatSpeed(cursorToSpeed(sp.getValue())));
-            });
-            sp.changed(() -> MusicPlayer.setSpeed(cursorToSpeed(sp.getValue())));
-            speedRow.add(sp).growX().width(Scl.scl(240f));
-            speedRow.add(spVal).width(Scl.scl(70f)).right().padLeft(6f);
+            // 倍速面板
+            analog.table(sp -> {
+                sp.background(Styles.grayPanel);
+                sp.margin(6f);
+                sp.defaults().pad(2f);
+                sp.add(Core.bundle.get("musicplayer.speed")).left().width(Scl.scl(42f));
+                Slider spd = new Slider(0f, 1f, 0.001f, false);
+                spd.setValue(speedToCursor(MusicPlayer.speed()));
+                final arc.scene.ui.Label spdVal = new arc.scene.ui.Label(formatSpeed(MusicPlayer.speed()), Styles.outlineLabel);
+                spdVal.setColor(Color.white);
+                spd.update(() -> {
+                    if (!spd.isDragging() && Math.abs(cursorToSpeed(spd.getValue()) - MusicPlayer.speed()) > 0.001f) {
+                        spd.setValue(speedToCursor(MusicPlayer.speed()));
+                    }
+                    spdVal.setText(formatSpeed(cursorToSpeed(spd.getValue())));
+                });
+                spd.changed(() -> MusicPlayer.setSpeed(cursorToSpeed(spd.getValue())));
+                sp.add(spd).growX().width(Scl.scl(120f));
+                sp.add(spdVal).width(Scl.scl(42f)).right().padLeft(4f);
+            }).growX();
         }).growX().padTop(2f).row();
 
         // —— A-B 区间（区间重复）：设 A / 设 B / 清除 + 区间状态与范围 ——
@@ -361,19 +383,21 @@ public class MusicPlayerDialog extends BaseDialog {
             row.defaults().pad(2f);
             // 曲名 + 类型；当前曲高亮
             TextButton name = new TextButton((isCurrent ? "[accent]> " : "") + t.name + type[0], Styles.flatBordert);
+            name.getLabel().setWrap(false);
+            name.getLabel().setEllipsis(true);
             name.clicked(() -> { MusicPlayer.play(idx); rebuild(); });
             row.add(name).growX().height(Scl.scl(38f));
             // 音频信息：时长 + 文件大小（右对齐固定宽列，保持各行对齐美观）
-            row.add(trackInfoLabel(t)).width(Scl.scl(92f)).right().padLeft(6f).color(Color.gray);
+            row.add(trackInfoLabel(t)).width(Scl.scl(100f)).right().padLeft(8f).padRight(4f).color(Color.gray);
             // 专辑归属按钮：点击弹出「加入/移出专辑」菜单
             ImageButton albumBtn = new ImageButton(Icon.folder, Styles.cleari);
             albumBtn.resizeImage(Scl.scl(16f));
             albumBtn.clicked(() -> albumAssignDialog(idx));
-            row.add(albumBtn).size(Scl.scl(34f)).padLeft(2f);
+            row.add(albumBtn).size(Scl.scl(32f)).padLeft(4f);
             ImageButton del = new ImageButton(Icon.trash, Styles.cleari);
             del.resizeImage(Scl.scl(18f));
             del.clicked(() -> removeTrack(idx));
-            row.add(del).size(Scl.scl(38f)).padLeft(4f);
+            row.add(del).size(Scl.scl(36f)).padLeft(4f);
             trackTable.add(row).growX().row();
         }
         if (count == 0) {
@@ -583,17 +607,19 @@ public class MusicPlayerDialog extends BaseDialog {
         dlg.show();
     }
 
-    /** 曲目信息标签：时长 + 文件大小（右对齐，统一格式保持整齐） */
+    /** 曲目信息标签：时长 + 文件大小（右对齐固定列宽保持对齐；未知显示占位符避免各行宽闪跳） */
     private static String trackInfoLabel(MusicTrack t) {
         StringBuilder sb = new StringBuilder();
         float len = MusicPlayer.trackLengthOf(t);
         if (len > 0f) {
             int total = (int) len;
             sb.append((total / 60) + ":" + (total % 60 < 10 ? "0" : "") + (total % 60));
+        } else {
+            sb.append("--:--");
         }
         long size = MusicPlayer.trackSizeOf(t);
-        if (size > 0) {
-            if (sb.length() > 0) sb.append("  ");
+        if (size > 0f) {
+            sb.append("  ");
             if (size > 1048576) sb.append(String.format("%.1fM", size / 1048576.0));
             else if (size > 1024) sb.append(String.format("%.0fK", size / 1024.0));
             else sb.append(size).append("B");

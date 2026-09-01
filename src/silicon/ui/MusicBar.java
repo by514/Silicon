@@ -111,6 +111,7 @@ public class MusicBar {
             // 倍速快捷循环按钮（对数 0.1–16x 常用档）：0.5 / 1 / 1.5 / 2 / 4
             final float[] speeds = {0.5f, 1f, 1.5f, 2f, 4f};
             TextButton speedBtn = new TextButton(speedLabel(), Styles.flatBordert);
+            speedBtn.getLabel().setWrap(false);
             speedBtn.getLabel().setEllipsis(true);
             speedBtn.setColor(Pal.accent);
             final String[] lastSpeed = {speedLabel()};
@@ -125,10 +126,11 @@ public class MusicBar {
                 MusicPlayer.setSpeed(next);
                 speedBtn.setText(speedLabel());
             });
-            bar.add(speedBtn).width(Scl.scl(48f)).pad(1f);
+            bar.add(speedBtn).width(Scl.scl(56f)).pad(1f);
 
             // 专辑作用域切换按钮：点按在「全部曲目」与各专辑间轮换；长按/双击由设置页管理
             TextButton albumBtn = new TextButton(albumScopeLabel(), Styles.flatBordert);
+            albumBtn.getLabel().setWrap(false);
             albumBtn.getLabel().setEllipsis(true);
             albumBtn.setColor(Pal.accent);
             albumBtn.clicked(() -> {
@@ -155,11 +157,11 @@ public class MusicBar {
                 if (!lastTrack[0].equals(lbl)) { lastTrack[0] = lbl; track.setText(lbl); }
             });
             // 曲名占满整行：colspan=全部列，避免与下方进度条共享高度、遮挡
-            bar.add(track).growX().pad(2f, 6f, 0f, 6f).colspan(10);
+            bar.add(track).growX().pad(2f, 6f, 2f, 6f).colspan(10);
 
             bar.row();
-            // 进度条（独立一行，低高度透明背景，避免遮挡曲名/按钮文字）
-            bar.add(seekSlider()).growX().height(Scl.scl(16f)).colspan(10).pad(0f, 6f, 3f, 6f);
+            // 进度条（独立一行，给足高度与上下留白，避免滑杆圆钮越界遮挡上方曲名/按钮文字）
+            bar.add(seekSlider()).growX().height(Scl.scl(18f)).colspan(10).pad(3f, 6f, 3f, 6f);
             // 展开态多了一行 → 需要多 rebuild 一次，交给 update 的空重建逻辑
         }
 

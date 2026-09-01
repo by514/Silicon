@@ -96,6 +96,8 @@ public class MusicPlayer {
     /** 已解析文件绝对路径 → 时长（秒）缓存，避免反复用 Music.create 读取耗时 */
     private static final ObjectMap<String, Float> lengthCache = new ObjectMap<>();
     private static boolean autoAdvancing = false;
+    /** 最近一次 seek 的游戏内时间（秒）；seek 后给 Soloud 一段恢复期，防止流式声源跳转瞬间被误判为「已播完」而跳歌 */
+    private static float lastSeekAt = -1000f;
     private static boolean initialized = false;
 
     /** 声源结束检测的静默阈值（秒）：自然播完后等待该时长再推进下一首，避免新声源流式加载未就绪时重复推进 */
@@ -357,6 +359,7 @@ public class MusicPlayer {
         }
         // 声音已结束（非循环播完或已 stop）
         if (autoAdvancing) return; // 上一条刚触发推进，等新声源就绪，避免重复推进/跳曲
+        if (Time.time - lastSeekAt < 1.0f) return; // seek 后声源可能瞬时未就绪，误判已播完会跳歌
         if (Time.time - lastBlip >= ADVANCE_DELAY) {
             autoAdvancing = true;
             lastBlip = Time.time;
@@ -670,6 +673,7 @@ public class MusicPlayer {
 
     /** 公开停止：停止本地并广播给其他玩家 */
     public static void stop() {
+        pausedPosition = 0f;
         stopLocal();
         bcast("stop");
     }
@@ -874,7 +878,7 @@ public class MusicPlayer {
     public static void seekRelative(float delta) {
         float len = trackLength();
         float pos = currentTime() + delta;
-        if (len > 0f) pos = arc.math.Mathf.clamp(pos, 0f, Math.max(0f, len - 0.3f));
+        if (len > 0f) pos = arc.math.Mathf.clamp(pos, 0f, Math.max(0f, len - 0.5f));
         else pos = Math.max(0f, pos);
         seek(pos);
     }
@@ -882,7 +886,11 @@ public class MusicPlayer {
     /** 拖动到指定进度（秒）：播放中直接 seek 流式声源；播放器暂停时只改保存进度（恢复后从该处继续） */
     public static void seek(float seconds) {
         if (seconds < 0f) seconds = 0f;
+        // 夹取在轨道末尾前 0.5 秒内，防止 seek 到末尾导致流立即结束触发跳歌
+        float len = trackLength();
+        if (len > 0f) seconds = Math.min(seconds, Math.max(0f, len - 0.5f));
         pausedPosition = seconds;
+        lastSeekAt = Time.time;
         if (localVoiceId >= 0) SoloudBridge.seek(localVoiceId, seconds);
     }
 
