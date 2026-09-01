@@ -79,6 +79,26 @@ public class MusicPlayer {
         int voiceId;
         float lastX, lastY;
         float createdAt;       // 创建时刻（秒），用于判断远程声源是否已足够久可安全清理
+        Sound sound;           // 对应 createStream 的 Sound，停止/清理时需 dispose 释放原生 Soloud 源
+    }
+
+    /** 停止并释放一个声源的播放与原生 Sound 句柄 */
+    private static void disposeVoice(Voice v) {
+        if (v == null) return;
+        if (v.voiceId >= 0) {
+            try {
+                Core.audio.stop(v.voiceId);
+            } catch (Exception ignored) {
+            }
+            v.voiceId = -1;
+        }
+        if (v.sound != null) {
+            try {
+                v.sound.dispose();
+            } catch (Exception ignored) {
+            }
+            v.sound = null;
+        }
     }
 
     /** 远程播放者 owner → 其当前播放曲目 hash（mp-pos 到达时定位声源用） */
@@ -207,9 +227,10 @@ public class MusicPlayer {
     private static void refreshVolumes() {
         for (int i = voices.size - 1; i >= 0; i--) {
             Voice v = voices.get(i);
-            if (v.voiceId < 0) { voices.remove(i); continue; }
-            // 远程非循环声源自然播完后 Soloud 会释放 id → 清理，防止 voices 无限累积
+            if (v.voiceId < 0) { disposeVoice(v); voices.remove(i); continue; }
+            // 远程非循环声源自然播完后 Soloud 会释放 id → 清理（含释放原生 Sound），防止 voices 无限累积
             if (!v.isLocalOwner && !Core.audio.isPlaying(v.voiceId) && Time.time - v.createdAt > 2f) {
+                disposeVoice(v);
                 voices.remove(i);
                 continue;
             }
@@ -371,8 +392,9 @@ public class MusicPlayer {
             SiliconLog.log("Cannot resolve " + (t == null ? "?" : t.name) + " to a local file");
             return;
         }
+        Sound snd = null;
         try {
-            Sound snd = Sound.createStream(file);
+            snd = Sound.createStream(file);
             int id = snd.play(calcListenVolume(0f, 0f), pitch, 0f);
             Core.audio.setLooping(id, loopMode == LOOP_ONE);
             localVoiceId = id;
@@ -383,11 +405,19 @@ public class MusicPlayer {
             v.hash = t.cacheHash;
             v.isLocalOwner = true;
             v.voiceId = id;
+            v.sound = snd;
             v.lastX = player.x;
             v.lastY = player.y;
             v.createdAt = Time.time;
             voices.add(v);
         } catch (Exception e) {
+            // 播放失败时释放刚创建的原生 Sound，避免泄漏
+            if (snd != null) {
+                try {
+                    snd.dispose();
+                } catch (Exception ignored) {
+                }
+            }
             SiliconLog.log("Failed to play " + t.name + ": " + e.getMessage());
             playing = false;
             localVoiceId = -1;
@@ -396,7 +426,10 @@ public class MusicPlayer {
 
     private static void unregisterLocalVoice() {
         for (int i = voices.size - 1; i >= 0; i--) {
-            if (voices.get(i).isLocalOwner) voices.remove(i);
+            if (voices.get(i).isLocalOwner) {
+                disposeVoice(voices.get(i));
+                voices.remove(i);
+            }
         }
     }
 
@@ -692,21 +725,30 @@ public class MusicPlayer {
             SiliconLog.log("Remote play: no local file for " + hash);
             return; // 尚未下载/尚未拿到二进制，等下载完成后由网络层再次调用
         }
+        Sound snd = null;
         try {
-            Sound snd = Sound.createStream(file);
-            int id = snd.play(calcListenVolume(ownerX - player.x, ownerY - player.y), pitch, 0f);
-            Core.audio.setLooping(id, false);
+            snd = Sound.createStream(file);
             Voice v = new Voice();
             v.ownerUuid = ownerUuid;
             v.hash = hash;
             v.isLocalOwner = false;
+            v.sound = snd;
+            int id = snd.play(calcListenVolume(ownerX - player.x, ownerY - player.y), pitch, 0f);
             v.voiceId = id;
+            Core.audio.setLooping(id, false);
             v.lastX = ownerX;
             v.lastY = ownerY;
             v.createdAt = Time.time;
             voices.add(v);
             ownerHash.put(ownerUuid, hash);
         } catch (Exception e) {
+            // play/createStream 失败时释放刚创建的原生 Sound，避免泄漏
+            if (snd != null) {
+                try {
+                    snd.dispose();
+                } catch (Exception ignored) {
+                }
+            }
             SiliconLog.log("Remote play fail: " + e.getMessage());
         }
     }
@@ -717,7 +759,7 @@ public class MusicPlayer {
             if (!v.isLocalOwner && ownerUuid.equals(v.ownerUuid)) {
                 v.lastX = x;
                 v.lastY = y;
-                Core.audio.setVolume(v.voiceId, calcListenVolume(x - player.x, y - player.y));
+                Core.audio.set(v.voiceId, calcListenVolume(x - player.x, y - player.y), calcListenPan(x));
                 return;
             }
         }
@@ -746,7 +788,7 @@ public class MusicPlayer {
         for (int i = voices.size - 1; i >= 0; i--) {
             Voice v = voices.get(i);
             if (!v.isLocalOwner && ownerUuid.equals(v.ownerUuid)) {
-                if (v.voiceId >= 0) Core.audio.stop(v.voiceId);
+                disposeVoice(v);
                 voices.remove(i);
             }
         }
@@ -757,7 +799,7 @@ public class MusicPlayer {
         for (int i = voices.size - 1; i >= 0; i--) {
             Voice v = voices.get(i);
             if (!v.isLocalOwner) {
-                if (v.voiceId >= 0) Core.audio.stop(v.voiceId);
+                disposeVoice(v);
                 voices.remove(i);
             }
         }
