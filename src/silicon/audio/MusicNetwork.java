@@ -622,5 +622,7 @@ public class MusicNetwork {
         pendingChunks = 0;
         MusicPlayer.clearRemoteVoices();
         MusicPlayer.cleanupStagingFiles();
+        // 本机仍在播放时，切换地图后重广播当前曲目，避免新地图玩家失去该声源
+        MusicPlayer.reBroadcastIfPlaying();
     }
 }

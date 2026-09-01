@@ -527,6 +527,13 @@ public class MusicPlayer {
         MusicNetwork.notifyLocalChanged(op);
     }
 
+    /** 地图切换后若本机仍在播放，重广播当前曲目给新地图玩家（供 MusicNetwork.reset 调用），防远端失去声源 */
+    static void reBroadcastIfPlaying() {
+        if (enabled && playing && current >= 0) {
+            bcast("play");
+        }
+    }
+
     // ------------------------------------------------------------------
     // 曲目解析为可播放 Fi（本地缓存优先复用）
     // ------------------------------------------------------------------
