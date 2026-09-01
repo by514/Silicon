@@ -184,7 +184,7 @@ public class MusicNetwork {
         // 帧速送出队列中的二进制分块（本地路径曲目）
         flushPendingChunks();
         if (!MusicPlayer.isEnabled() || !MusicPlayer.isPlaying()) return;
-        if (Time.time - lastPosTick < 30f) return;
+        if (Time.time - lastPosTick < 2f) return;
         lastPosTick = Time.time;
         String owner = ownerKey();
         String hash = MusicPlayer.currentTrack() == null ? "" : MusicPlayer.currentTrack().cacheHash;
@@ -379,6 +379,8 @@ public class MusicNetwork {
     /** 本机播放 URL 曲目但尚未下载缓存时，先从网络下载到本地缓存，完成后回调 onDone（主线程）。 */
     static void fetchLocalThenPlay(MusicTrack t, Runnable onDone) {
         if (t == null || !t.isUrl() || t.source == null) return;
+        // 登记真实扩展名：writeCacheBytes 才会写入 <hash>.<真实ext>，避免 mp3/wav 被写成 .ogg 而解码失败、反复重下
+        MusicPlayer.registerHashExt(t.cacheHash, MusicPlayer.extensionFrom(t.source));
         if (MusicPlayer.hasCache(t.cacheHash)) {
             Core.app.post(onDone);
             return;
@@ -604,5 +606,6 @@ public class MusicNetwork {
         pendingIdx = 0;
         pendingChunks = 0;
         MusicPlayer.clearRemoteVoices();
+        MusicPlayer.cleanupStagingFiles();
     }
 }

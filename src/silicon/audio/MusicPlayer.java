@@ -65,7 +65,11 @@ public class MusicPlayer {
     private static boolean playing = false;
     private static int localVoiceId = -1;
     private static float lastBlip = 0;
+    private static boolean autoAdvancing = false;
     private static boolean initialized = false;
+
+    /** 声源结束检测的静默阈值（秒）：自然播完后等待该时长再推进下一首，避免新声源流式加载未就绪时重复推进 */
+    private static final float ADVANCE_DELAY = 0.5f;
 
     /** 单个活跃声源句柄（本机 owner 或远程，可叠加）。远程按 ownerUuid 区分归属 */
     static class Voice {
@@ -74,6 +78,7 @@ public class MusicPlayer {
         boolean isLocalOwner;
         int voiceId;
         float lastX, lastY;
+        float createdAt;       // 创建时刻（秒），用于判断远程声源是否已足够久可安全清理
     }
 
     /** 远程播放者 owner → 其当前播放曲目 hash（mp-pos 到达时定位声源用） */
@@ -129,9 +134,14 @@ public class MusicPlayer {
     }
 
     public static void setEnabled(boolean value) {
+        if (enabled == value) return;
         enabled = value;
         Core.settings.put(CFG_ENABLED, enabled);
-        if (!enabled) stopAll();
+        if (!enabled) {
+            stopAll();
+            // 通知其他玩家停止听到本机的曲目（否则对方仍按旧声源播我上一条）
+            bcast("stop");
+        }
     }
 
     /** 网络接收侧入口：关闭时调用方可直接丢弃 */
@@ -157,10 +167,15 @@ public class MusicPlayer {
 
     private static void tickLocal() {
         if (!playing || localVoiceId < 0) return;
-        // 自然播完检测
-        if (Core.audio.isPlaying(localVoiceId)) return;
-        // 声音已停止（播完或非循环）→ 推进
-        if (Time.time - lastBlip >= 60f) {
+        // 仍在播放（含暂停态，暂停时 Soloud 的 id 仍有效）→ 复位推进守卫
+        if (Core.audio.isPlaying(localVoiceId)) {
+            autoAdvancing = false;
+            return;
+        }
+        // 声音已结束（非循环播完或已 stop）
+        if (autoAdvancing) return; // 上一条刚触发推进，等新声源就绪，避免重复推进/跳曲
+        if (Time.time - lastBlip >= ADVANCE_DELAY) {
+            autoAdvancing = true;
             lastBlip = Time.time;
             autoAdvance();
         }
@@ -188,10 +203,16 @@ public class MusicPlayer {
         return playing;
     }
 
-    /** 各声源按播放者当前位置刷新音量（距离衰减） */
+    /** 各声源按播放者当前位置刷新音量（距离衰减），并清理已自然播完的远程声源 */
     private static void refreshVolumes() {
-        for (Voice v : voices) {
-            if (v.voiceId < 0) continue;
+        for (int i = voices.size - 1; i >= 0; i--) {
+            Voice v = voices.get(i);
+            if (v.voiceId < 0) { voices.remove(i); continue; }
+            // 远程非循环声源自然播完后 Soloud 会释放 id → 清理，防止 voices 无限累积
+            if (!v.isLocalOwner && !Core.audio.isPlaying(v.voiceId) && Time.time - v.createdAt > 2f) {
+                voices.remove(i);
+                continue;
+            }
             // 本机声源原点跟随玩家（自己永远在声源处 → 恒 0 位移全音量）；
             // 远程声源原点固定在 owner 位置，听者按「自己到 owner」衰减。
             if (v.isLocalOwner) {
@@ -199,7 +220,9 @@ public class MusicPlayer {
                 v.lastY = player.y;
             }
             float vol = calcListenVolume(v.lastX - player.x, v.lastY - player.y);
-            Core.audio.setVolume(v.voiceId, vol);
+            float pan = calcListenPan(v.lastX);
+            // set(voiceId, volume, pan) 同时更新音量与左右声像（0=中，负=左，正=右）
+            Core.audio.set(v.voiceId, vol, pan);
         }
     }
 
@@ -208,6 +231,14 @@ public class MusicPlayer {
         float dist = (float) Math.sqrt(dx * dx + dy * dy);
         float factor = clamp(1f - dist / FALLOFF_RADIUS, 0f, 1f);
         return volume * factor * BASE_VOLUME;
+    }
+
+    /** 按声源在世界 x 相对监听视角（相机）的水平偏移计算左右声像（-0.9 左 … 0.9 右） */
+    static float calcListenPan(float wx) {
+        if (Core.camera == null) return 0f;
+        float half = Core.camera.width / 2f;
+        if (half <= 0f) return 0f;
+        return clamp((wx - Core.camera.position.x) / half, -0.9f, 0.9f);
     }
 
     private static float clamp(float v, float min, float max) {
@@ -354,6 +385,7 @@ public class MusicPlayer {
             v.voiceId = id;
             v.lastX = player.x;
             v.lastY = player.y;
+            v.createdAt = Time.time;
             voices.add(v);
         } catch (Exception e) {
             SiliconLog.log("Failed to play " + t.name + ": " + e.getMessage());
@@ -553,6 +585,19 @@ public class MusicPlayer {
         }
     }
 
+    /** 清理残留的未完成分块暂存文件（世界切换时无进行中的传输，避免孤儿 .part 长期堆积） */
+    public static void cleanupStagingFiles() {
+        try {
+            Fi dir = Core.files.cache(CACHE_DIR);
+            if (dir != null && dir.isDirectory()) {
+                for (Fi f : dir.list()) {
+                    if (f != null && "part".equalsIgnoreCase(f.extension())) f.delete();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     /** 解析 hash 对应缓存文件的真实扩展名：优先已登记/已知，否则扫缓存目录 `<hash>.*`（跨重启命中） */
     private static String resolveExt(String hash) {
         if (hash == null || hash.isEmpty()) return null;
@@ -658,6 +703,7 @@ public class MusicPlayer {
             v.voiceId = id;
             v.lastX = ownerX;
             v.lastY = ownerY;
+            v.createdAt = Time.time;
             voices.add(v);
             ownerHash.put(ownerUuid, hash);
         } catch (Exception e) {
