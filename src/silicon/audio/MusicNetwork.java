@@ -61,37 +61,60 @@ public class MusicNetwork {
         if (initialized) return;
         initialized = true;
 
-        // —— 服务端接收客户端上报并转发给所有客户端 ——
-        if (netServer != null) {
-            netServer.addPacketHandler(MSG_SYNC, (p, data) -> {
-                if (p == null) return;
-                Call.clientPacketReliable(MSG_SYNC, data);
-            });
-            netServer.addPacketHandler(MSG_META, (p, data) -> {
-                if (p == null) return;
-                Call.clientPacketReliable(MSG_META, data);
-            });
-            netServer.addPacketHandler(MSG_POS, (p, data) -> {
-                if (p == null) return;
-                Call.clientPacketUnreliable(MSG_POS, data);
-            });
-            netServer.addBinaryPacketHandler(MSG_CHUNK, (p, bytes) -> {
-                if (p == null || bytes == null) return;
-                Call.clientBinaryPacketReliable(MSG_CHUNK, bytes);
-            });
-        }
+        // netClient / netServer 在 mod init 阶段可能尚未创建：
+        // 延迟到对应端加载完成事件注册处理器，确保已就绪且只注册一次。
+        Events.on(EventType.ClientLoadEvent.class, e -> registerClientHandlers());
+        Events.on(EventType.ServerLoadEvent.class, e -> registerServerHandlers());
 
-        // —— 客户端接收 ——
-        mindustry.core.NetClient nc = mindustry.Vars.netClient;
-        if (nc != null) {
-            nc.addPacketHandler(MSG_SYNC, MusicNetwork::onSync);
-            nc.addPacketHandler(MSG_META, MusicNetwork::onMeta);
-            nc.addPacketHandler(MSG_POS, MusicNetwork::onPos);
-            nc.addBinaryPacketHandler(MSG_CHUNK, MusicNetwork::onChunk);
-        }
+        // 玩家离开时清理其声源与坐标，避免脱离后残留播放
+        Events.on(EventType.PlayerLeave.class, e -> {
+            String uuid = e.player == null ? null : e.player.uuid();
+            if (uuid == null || uuid.isEmpty()) return;
+            ownerPos.remove(uuid);
+            recv.remove(uuid);
+            MusicPlayer.stopRemoteVoice(uuid);
+        });
 
         // 周期性上报本机坐标（若本机正在本地播放）
         Events.run(EventType.Trigger.update, MusicNetwork::tick);
+    }
+
+    private static boolean clientRegistered = false;
+
+    private static void registerClientHandlers() {
+        if (clientRegistered) return;
+        mindustry.core.NetClient nc = mindustry.Vars.netClient;
+        if (nc == null) return;
+        clientRegistered = true;
+        nc.addPacketHandler(MSG_SYNC, MusicNetwork::onSync);
+        nc.addPacketHandler(MSG_META, MusicNetwork::onMeta);
+        nc.addPacketHandler(MSG_POS, MusicNetwork::onPos);
+        nc.addBinaryPacketHandler(MSG_CHUNK, MusicNetwork::onChunk);
+    }
+
+    private static boolean serverRegistered = false;
+
+    private static void registerServerHandlers() {
+        if (serverRegistered) return;
+        if (netServer == null) return;
+        serverRegistered = true;
+        // 服务端收到客户端上报并转发给所有客户端
+        netServer.addPacketHandler(MSG_SYNC, (p, data) -> {
+            if (p == null) return;
+            Call.clientPacketReliable(MSG_SYNC, data);
+        });
+        netServer.addPacketHandler(MSG_META, (p, data) -> {
+            if (p == null) return;
+            Call.clientPacketReliable(MSG_META, data);
+        });
+        netServer.addPacketHandler(MSG_POS, (p, data) -> {
+            if (p == null) return;
+            Call.clientPacketUnreliable(MSG_POS, data);
+        });
+        netServer.addBinaryPacketHandler(MSG_CHUNK, (p, bytes) -> {
+            if (p == null || bytes == null) return;
+            Call.clientBinaryPacketReliable(MSG_CHUNK, bytes);
+        });
     }
 
     // ------------------------------------------------------------------
@@ -141,6 +164,8 @@ public class MusicNetwork {
         } else if (t.isLocal() && t.source != null) {
             sb.append(",\"src\":\"").append(escape(t.source)).append('"');
         }
+        // 附带 owner 当前坐标，接收端首帧即可准确定位（mp-pos 稍后到达以期精确）
+        sb.append(",\"x\":").append(playerX()).append(",\"y\":").append(playerY());
         sb.append('}');
         sendReliable(MSG_SYNC, sb.toString());
     }
@@ -202,6 +227,7 @@ public class MusicNetwork {
                 .append("\",\"type\":2")
                 .append(",\"total\":").append(all.length)
                 .append(",\"chunks\":").append(chunkCount)
+                .append(",\"ext\":\"").append(MusicPlayer.extensionFrom(t.source).replace(".", ""))
                 .append('}');
             sendReliable(MSG_META, meta.toString());
 
@@ -251,6 +277,14 @@ public class MusicNetwork {
             String name = extract(data, "name");
             String url = extract(data, "url");
             String src = extract(data, "src");
+            // 首帧坐标（emitSync 附带）
+            String sx = extract(data, "x");
+            String sy = extract(data, "y");
+            float ox = sx == null ? Float.NaN : parseFloatSafe(sx);
+            float oy = sy == null ? Float.NaN : parseFloatSafe(sy);
+            if (!Float.isNaN(ox) && !Float.isNaN(oy)) {
+                ownerPos.put(owner, new float[]{ox, oy});
+            }
 
             if (op.equals("stop")) {
                 MusicPlayer.stopRemoteVoice(owner);
@@ -295,6 +329,7 @@ public class MusicNetwork {
             MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
             return;
         }
+        MusicPlayer.registerHashExt(hash, MusicPlayer.extensionFrom(url));
         Log.info("[SiliconMusic] downloading " + url);
         Http.get(url, res -> {
             byte[] bytes = res.getResult();
@@ -336,8 +371,10 @@ public class MusicNetwork {
             String owner = extract(data, "owner");
             String hash = extract(data, "hash");
             int chunks = parseInt(extract(data, "chunks"), 0);
+            String ext = extract(data, "ext");
             if (owner == null || hash == null || chunks <= 0 || isSelf(owner)) return;
             ownerHash.put(owner, hash);
+            if (ext != null && !ext.isEmpty()) MusicPlayer.registerHashExt(hash, ext);
             if (MusicPlayer.hasCache(hash)) return; // 已有缓存，无需接收分块
             // 建接收缓冲与缓存文件（先写占位）
             ChunkRecv r = new ChunkRecv();
@@ -503,6 +540,15 @@ public class MusicNetwork {
             return Integer.parseInt(s.trim());
         } catch (Exception e) {
             return def;
+        }
+    }
+
+    private static float parseFloatSafe(String s) {
+        if (s == null) return Float.NaN;
+        try {
+            return Float.parseFloat(s.trim());
+        } catch (Exception e) {
+            return Float.NaN;
         }
     }
 

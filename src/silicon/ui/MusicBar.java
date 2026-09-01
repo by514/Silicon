@@ -35,7 +35,8 @@ public class MusicBar {
             if (bar != null && !bar.isDescendantOf(Core.scene.root)) {
                 bar = null;
             }
-            if (!MusicPlayer.isEnabled()) {
+            // 仅在游戏中且有玩家实体时显示（避免主菜单 player==null 时误播 NPE）
+            if (!mindustry.Vars.state.isGame() || mindustry.Vars.player == null || !MusicPlayer.isEnabled()) {
                 if (bar != null) {
                     bar.remove();
                     bar = null;

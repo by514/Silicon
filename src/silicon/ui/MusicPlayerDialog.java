@@ -158,8 +158,7 @@ public class MusicPlayerDialog extends BaseDialog {
         BaseDialog dlg = new BaseDialog(Core.bundle.get("musicplayer.addInternal"));
         Table list = new Table();
         list.top();
-        String[] keys = {"game1","game2","game3","game4","game5","game6","game7","game8","game9",
-            "boss1","boss2","fine","editor","menu","land","launch"};
+        String[] keys = MusicPlayer.internalKeys();
         for (String k : keys) {
             list.button(k, Styles.flatBordert, () -> {
                 MusicTrack t = MusicPlayer.trackByHash("int-" + k);

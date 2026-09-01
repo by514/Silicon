@@ -150,6 +150,7 @@ public class MusicPlayer {
 
     private static void update() {
         if (!initialized || !enabled) return;
+        if (player == null) return;
         tickLocal();
         refreshVolumes();
     }
@@ -219,6 +220,11 @@ public class MusicPlayer {
 
     public static Seq<MusicTrack> tracks() {
         return tracks;
+    }
+
+    /** 内置曲目 key 列表（供 UI 内置曲目选择器使用） */
+    public static String[] internalKeys() {
+        return INTERNAL_KEYS;
     }
 
     public static int currentIndex() {
@@ -324,7 +330,10 @@ public class MusicPlayer {
                 // 本机 URL 曲目尚未下载：先下载到缓存，完成后在主线程重播
                 final int target = index;
                 MusicNetwork.fetchLocalThenPlay(t, () -> {
-                    if (current == target && !playing) beginPlayback(target);
+                    if (current == target && !playing) {
+                        beginPlayback(target);
+                        if (playing) bcast("play");
+                    }
                 });
                 return;
             }
@@ -333,9 +342,8 @@ public class MusicPlayer {
         }
         try {
             Sound snd = Sound.createStream(file);
-            int id = snd.at(player.x, player.y, calcListenVolume(0f, 0f), 0f);
+            int id = snd.play(calcListenVolume(0f, 0f), pitch, 0f);
             Core.audio.setLooping(id, loopMode == LOOP_ONE);
-            Core.audio.setPitch(id, pitch);
             localVoiceId = id;
             playing = true;
             lastBlip = Time.time;
@@ -487,38 +495,99 @@ public class MusicPlayer {
     }
 
     // ------------------------------------------------------------------
-    // 本地缓存
+    // 本地缓存（文件名统一 `<hash>.<真实扩展名>`，扩展名从源/协议得出，
+    // 避免 mp3/wav 被 Soloud 按 .ogg 错误解码）
     // ------------------------------------------------------------------
 
+    /** hash → 真实扩展名（供网络接收侧在分块落盘/查询时还原文件名） */
+    private static final ObjectMap<String, String> hashExt = new ObjectMap<>();
+
     public static Fi cacheFileOf(MusicTrack t) {
-        return Core.files.cache(CACHE_DIR + t.cacheHash + ".ogg");
+        return cacheFileForHash(t.cacheHash, extensionFrom(t.source));
+    }
+
+    /** 登记某 hash 的真实扩展名（网络接收侧写/查缓存前调用） */
+    public static void registerHashExt(String hash, String ext) {
+        if (hash == null || hash.isEmpty()) return;
+        hashExt.put(hash, normalizeExt(ext));
     }
 
     public static boolean hasCache(String hash) {
-        return Core.files.cache(CACHE_DIR + hash + ".ogg").exists();
+        String ext = resolveExt(hash);
+        return ext != null && Core.files.cache(CACHE_DIR + hash + ext).exists();
+    }
+
+    public static boolean hasCache(String hash, String ext) {
+        String e = normalizeExt(ext);
+        return Core.files.cache(CACHE_DIR + hash + e).exists();
     }
 
     public static Fi cacheFileForHash(String hash) {
-        return Core.files.cache(CACHE_DIR + hash + ".ogg");
+        String ext = resolveExt(hash);
+        if (ext == null) return null;
+        return Core.files.cache(CACHE_DIR + hash + ext);
+    }
+
+    public static Fi cacheFileForHash(String hash, String ext) {
+        return Core.files.cache(CACHE_DIR + hash + normalizeExt(ext));
+    }
+
+    /** 解析 hash 对应缓存文件的真实扩展名：优先已登记/已知，否则扫缓存目录 `<hash>.*`（跨重启命中） */
+    private static String resolveExt(String hash) {
+        if (hash == null || hash.isEmpty()) return null;
+        String known = hashExt.get(hash);
+        if (known != null) return known;
+        // 未登记：扫缓存目录找 <hash>.<任意ext>
+        try {
+            Fi dir = Core.files.cache(CACHE_DIR);
+            if (dir != null && dir.isDirectory()) {
+                for (Fi f : dir.list()) {
+                    if (f != null && f.nameWithoutExtension().equals(hash)) {
+                        String e = f.extension();
+                        String ext = (e == null || e.isEmpty()) ? ".ogg" : ("." + e.toLowerCase());
+                        hashExt.put(hash, ext);
+                        return ext;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        hashExt.put(hash, ".ogg");
+        return ".ogg";
+    }
+
+    private static String normalizeExt(String ext) {
+        if (ext == null || ext.isEmpty()) return ".ogg";
+        return ext.charAt(0) == '.' ? ext.toLowerCase() : "." + ext.toLowerCase();
     }
 
     public static String extensionFrom(String source) {
+        source = source == null ? "" : source;
+        int q = source.indexOf('?');
+        if (q >= 0) source = source.substring(0, q);
         int dot = source.lastIndexOf('.');
         if (dot >= 0) {
             String e = source.substring(dot).toLowerCase();
             if (e.equals(".mp3")) return ".mp3";
             if (e.equals(".wav")) return ".wav";
+            if (e.equals(".flac")) return ".flac";
         }
         return ".ogg";
     }
 
-    /** 写缓存（URL 下载 / 二进制共享落地统一走这里）；扩展名用 ogg 以便 Sound.createStream 识别 */
+    /** 写缓存（URL 下载 / 二进制共享落地统一走这里）；按真实扩展名命名 */
     static boolean writeCacheBytes(String hash, byte[] data) {
+        String ext = hashExt.get(hash, ".ogg");
+        return writeCacheBytes(hash, ext, data);
+    }
+
+    static boolean writeCacheBytes(String hash, String ext, byte[] data) {
         try {
-            Fi file = Core.files.cache(CACHE_DIR + hash + ".ogg");
+            Fi file = cacheFileForHash(hash, ext);
             try (OutputStream out = file.write(false)) {
                 out.write(data);
             }
+            hashExt.put(hash, ext == null ? ".ogg" : ext);
             return true;
         } catch (Exception e) {
             SiliconLog.log("Cache write fail " + hash + ": " + e.getMessage());
@@ -529,7 +598,7 @@ public class MusicPlayer {
     /** 从输入流写缓存（URL 分块下载用） */
     static boolean writeCacheStream(String hash, InputStream in) {
         try {
-            Fi file = Core.files.cache(CACHE_DIR + hash + ".ogg");
+            Fi file = cacheFileForHash(hash);
             try (InputStream src = in; OutputStream out = file.write(false)) {
                 Streams.copy(src, out);
             }
@@ -572,9 +641,8 @@ public class MusicPlayer {
         }
         try {
             Sound snd = Sound.createStream(file);
-            int id = snd.at(ownerX, ownerY, calcListenVolume(ownerX - player.x, ownerY - player.y), 0f);
+            int id = snd.play(calcListenVolume(ownerX - player.x, ownerY - player.y), pitch, 0f);
             Core.audio.setLooping(id, false);
-            Core.audio.setPitch(id, pitch);
             Voice v = new Voice();
             v.ownerUuid = ownerUuid;
             v.hash = hash;
