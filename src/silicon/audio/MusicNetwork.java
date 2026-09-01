@@ -51,6 +51,8 @@ public class MusicNetwork {
     private static final ObjectMap<String, String> ownerHash = new ObjectMap<>();
     /** ownerUuid → 最近已知坐标 */
     private static final ObjectMap<String, float[]> ownerPos = new ObjectMap<>();
+    /** hash → 该 URL 下载完成后的待执行回调；命中即表示该 hash 正在下载中（去重，防止对同一 URL 并发多次 Http） */
+    private static final ObjectMap<String, arc.struct.Seq<Runnable>> pendingDownloads = new ObjectMap<>();
 
     private static float lastPosTick = 0;
     private static boolean initialized = false;
@@ -361,18 +363,10 @@ public class MusicNetwork {
             return;
         }
         MusicPlayer.registerHashExt(hash, MusicPlayer.extensionFrom(url));
-        Log.info("[SiliconMusic] downloading " + url);
-        Http.get(url, res -> {
-            byte[] bytes = res.getResult();
-            Core.app.post(() -> {
-                MusicPlayer.writeCacheBytes(hash, bytes);
-                if (MusicPlayer.canReceive()) {
-                    float[] pos = ownerPos.get(owner);
-                    MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
-                }
-            });
-        }, err -> {
-            Log.info("[SiliconMusic] download fail: " + err.getMessage());
+        // 同一 URL 已在下载中时仅登记回调（去重，避免并发多次 Http）；下载完成统一触发各自回调
+        downloadHash(hash, url, () -> {
+            float[] pos = ownerPos.get(owner);
+            MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
         });
     }
 
@@ -385,16 +379,37 @@ public class MusicNetwork {
             Core.app.post(onDone);
             return;
         }
-        Log.info("[SiliconMusic] downloading (local) " + t.source);
-        Http.get(t.source, res -> {
+        downloadHash(t.cacheHash, t.source, onDone);
+    }
+
+    /** 按 URL 下载到缓存并去重：同一 hash 已在下载中时只追加回调、不重复发起 Http；下载完成后统一在主线程触发所有回调。 */
+    private static void downloadHash(String hash, String url, Runnable onDone) {
+        if (MusicPlayer.hasCache(hash)) {
+            Core.app.post(onDone);
+            return;
+        }
+        arc.struct.Seq<Runnable> pend = pendingDownloads.get(hash);
+        if (pend != null) {
+            pend.add(onDone);
+            return; // 已在下载中，去重：只登记回调，不重复发起请求
+        }
+        pend = new arc.struct.Seq<>();
+        pend.add(onDone);
+        pendingDownloads.put(hash, pend);
+        Log.info("[SiliconMusic] downloading " + url);
+        Http.get(url, res -> {
             byte[] bytes = res.getResult();
             Core.app.post(() -> {
-                if (MusicPlayer.writeCacheBytes(t.cacheHash, bytes)) {
-                    onDone.run();
+                boolean ok = MusicPlayer.writeCacheBytes(hash, bytes);
+                arc.struct.Seq<Runnable> done = pendingDownloads.remove(hash);
+                if (ok && done != null) {
+                    for (Runnable r : done) r.run();
                 }
             });
         }, err -> {
             Log.info("[SiliconMusic] download fail: " + err.getMessage());
+            // 失败时清掉排队回调，调用方若仍需播放可再次触发下载重试
+            pendingDownloads.remove(hash);
         });
     }
 
