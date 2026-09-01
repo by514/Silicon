@@ -167,7 +167,7 @@ public class BlockSearch{
         searchRow = new Table(Tex.pane2);
         searchRow.name = searchRowName;
         searchRow.top().left().margin(4f);
-        searchRow.image(Icon.zoom).padRight(8f);
+        searchRow.image(Icon.zoom).size(38f).padRight(8f);
         field = searchRow.field("", BlockSearch::onChanged).growX().height(38f)
             .name("silicon-search-field").maxTextLength(64).get();
         field.setMessageText(Core.bundle.get("blocksearch.hint"));

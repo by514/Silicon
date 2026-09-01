@@ -67,6 +67,7 @@ public class UniversalJunctionDialog extends BaseDialog {
     }
 
     public void setup() {
+        allRegions.clear(); // shown → setup 可能多次调用：先清空，避免 re-show 时累积陈旧区域状态
         cont.table(grid -> {
             grid.margin(10f);
             for (int in = 0; in < 4; in++) {
@@ -95,39 +96,22 @@ public class UniversalJunctionDialog extends BaseDialog {
                     rs.redBox = redBox;
                     column.add(redBox).growX().height(RED_H).padTop(6f).row();
 
-                    // 判定该输入方向是否已配置：全为默认值 2 视为未配置（按钮放红框）；否则按 weights 还原槽位。
-                    boolean configured = false;
+                    // 统一按建筑当前权重还原布局：w>0 → 放入对应白色槽位，w==0 → 放入红框。
+                    // 不再区分「未配置」分支：默认全 2（=均分）会自然显示在 2 号白色槽位，
+                    // 而不是误导性地放进红框（红框语义为优先级 0 = 不输出）。
+                    // 仅还原显示：不改写 weights，也不在此触发 configure，避免「打开面板即重置路由瞬态」。
                     for (int out = 0; out < 4; out++) {
-                        if (build.weights[input][out] != 2) { configured = true; break; }
+                        Direction d = new Direction(rs, out);
+                        int w = build.weights[input][out];
+                        if (w > 0) {
+                            rs.placeInSlotByWeight(d, w);
+                        } else {
+                            rs.redButtons.add(d);
+                        }
                     }
-
-                    // 从建筑当前权重初始化布局：仅当已配置时还原槽位；未配置（默认全2）按钮放红框。
-                    // 「返回再进入」能看到已保存的配置；且未配置时不动 weights，保持默认全 2。
-                    if (configured) {
-                        for (int out = 0; out < 4; out++) {
-                            Direction d = new Direction(rs, out);
-                            int w = build.weights[input][out];
-                            if (w > 0) {
-                                rs.placeInSlotByWeight(d, w);
-                            } else {
-                                rs.redButtons.add(d);
-                            }
-                        }
-                        build.configure(build.weightsString());
-                        rs.rebuildRed();
-                        rs.pruneEmptySlots();
-                        rs.rebuildSlots();
-                    } else {
-                        for (int out = 0; out < 4; out++) {
-                            rs.redButtons.add(new Direction(rs, out));
-                        }
-                        rs.rebuildRed();
-                        // 未配置：weights 保持默认全 2（内存），不触发 configure 写回，按钮全部显示在红框
-                        for (int out = 0; out < 4; out++) {
-                            build.weights[input][out] = 2;
-                        }
-                        build.configure(build.weightsString());
-                    }
+                    rs.rebuildRed();
+                    rs.pruneEmptySlots();
+                    rs.rebuildSlots();
                 }).growX().grow().uniformX().pad(8f);
             }
         }).grow();
@@ -150,7 +134,6 @@ public class UniversalJunctionDialog extends BaseDialog {
                 t.defaults()
                         .size(280f, 60f)
                         .left()
-                        .marginLeft(12f)
                         .margin(10f);
                 t.button("@clear", Icon.cancel, Styles.flatt, () -> {
                     ui.showConfirm("", () -> {
