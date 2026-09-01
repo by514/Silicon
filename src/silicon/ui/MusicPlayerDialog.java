@@ -183,6 +183,11 @@ public class MusicPlayerDialog extends BaseDialog {
         field.setMessageText(type == MusicTrack.URL
                 ? Core.bundle.get("musicplayer.placeholderUrl") : Core.bundle.get("musicplayer.placeholderLocal"));
         dlg.cont.add(field).growX().pad(10f).row();
+        // 无效输入提示（初始隐藏，输入不合法时显示）
+        final arc.scene.ui.Label err = new arc.scene.ui.Label(Core.bundle.get("musicplayer.invalid"), Styles.defaultLabel);
+        err.setColor(Color.scarlet);
+        err.visible = false;
+        dlg.cont.add(err).growX().padTop(2f).row();
         dlg.cont.button(Core.bundle.get("musicplayer.confirm"), Styles.flatBordert, () -> {
             String src = field.getText().trim();
             if (src.isEmpty()) { dlg.hide(); return; }
@@ -190,6 +195,11 @@ public class MusicPlayerDialog extends BaseDialog {
             int slash = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
             if (slash >= 0 && slash < src.length() - 1) name = src.substring(slash + 1);
             MusicTrack t = MusicPlayer.addTrack(type, src, name);
+            if (t == null) {
+                // 非法来源（无匹配扩展名等）：提示并保持弹窗，不静默关闭
+                err.visible = true;
+                return;
+            }
             dlg.hide();
             rebuildRows();
         }).width(Scl.scl(120f)).height(Scl.scl(40f));
