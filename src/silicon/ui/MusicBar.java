@@ -74,7 +74,7 @@ public class MusicBar {
             TextButton track = new TextButton(trackLabel(), Styles.flatBordert);
             track.clicked(MusicPlayerDialog::open);
             track.update(() -> track.setText(trackLabel()));
-            bar.add(track).height(Scl.scl(40f)).width(Scl.scl(150f)).pad(2f);
+            bar.add(track).height(Scl.scl(40f)).width(Scl.scl(210f)).pad(2f);
 
             ImageButton next = new ImageButton(Icon.rightOpen, Styles.cleari);
             next.clicked(MusicPlayer::next);
@@ -91,7 +91,7 @@ public class MusicBar {
 
         bar.pack();
         // 展开态整条宽度固定，保证「播放/暂停」「收起」等文字按钮不被裁切
-        bar.setSize(Scl.scl(collapsed ? 44f : 470f), bar.getPrefHeight());
+        bar.setSize(Scl.scl(collapsed ? 44f : 530f), bar.getPrefHeight());
         float w = bar.getWidth();
         bar.setPosition(Core.graphics.getWidth() - w - Scl.scl(10f), Scl.scl(16f));
         Core.scene.root.addChild(bar);

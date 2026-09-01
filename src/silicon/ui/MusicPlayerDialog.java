@@ -65,7 +65,7 @@ public class MusicPlayerDialog extends BaseDialog {
 
         // —— 音量 / 音高 ——
         cont.table(sl -> {
-            sl.add(Core.bundle.get("musicplayer.volume")).padRight(10f);
+            sl.add(Core.bundle.get("musicplayer.volume")).width(Scl.scl(70f)).left().padRight(10f);
             Slider vol = new Slider(0f, 1f, 0.05f, false);
             vol.setValue(MusicPlayer.volume());
             vol.changed(() -> MusicPlayer.setVolume(vol.getValue()));
@@ -73,7 +73,7 @@ public class MusicPlayerDialog extends BaseDialog {
         }).padTop(8f).row();
 
         cont.table(sl -> {
-            sl.add(Core.bundle.get("musicplayer.pitch")).padRight(10f);
+            sl.add(Core.bundle.get("musicplayer.pitch")).width(Scl.scl(70f)).left().padRight(10f);
             Slider pit = new Slider(0.5f, 2f, 0.05f, false);
             pit.setValue(MusicPlayer.pitch());
             pit.changed(() -> MusicPlayer.setPitch(pit.getValue()));
