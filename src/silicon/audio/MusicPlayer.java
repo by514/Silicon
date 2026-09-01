@@ -587,6 +587,10 @@ public class MusicPlayer {
         }
         Sound snd = null;
         try {
+            if (!isAsciiPath(file.absolutePath())) {
+                SiliconLog.log("Block playback of non-ASCII path: " + file.name());
+                return;
+            }
             snd = Sound.createStream(file);
             int id = snd.play(volume, pitch * speed, 0f);
             Core.audio.setLooping(id, loopMode == LOOP_ONE);
@@ -944,7 +948,7 @@ public class MusicPlayer {
             // Soloud 原生 fopen 无法读取含中文/非 ASCII 字符的路径（Windows fopen 用 ANSI 编码），
             // 也依赖扩展名解码。统一把本地文件复制到 ASCII 安全的缓存路径 <hash>.<真实ext> 后再播放。
             Fi safe = localAsciiCopy(t, src);
-            return safe != null ? safe : src;
+            return safe; // 不再 fallback 到 src（非 ASCII 路径），由播放端 isAsciiPath 守卫兜底
         }
         return null; // URL 未缓存由网络层下载
     }
@@ -1176,6 +1180,10 @@ public class MusicPlayer {
         }
         Sound snd = null;
         try {
+            if (!isAsciiPath(file.absolutePath())) {
+                SiliconLog.log("Block remote play of non-ASCII path: " + file.name());
+                return;
+            }
             snd = Sound.createStream(file);
             Voice v = new Voice();
             v.ownerUuid = ownerUuid;
