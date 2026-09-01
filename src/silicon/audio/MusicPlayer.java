@@ -39,13 +39,18 @@ public class MusicPlayer {
     private static final String CFG_LOOP = "musicplayer.loopmode";
     private static final String CFG_ENABLED = "musicplayer.enabled";
     private static final String CFG_LAST = "musicplayer.lastIndex";
+    private static final String CFG_ALBUMS = "musicplayer.albums";
+    private static final String CFG_ALBUM = "musicplayer.album";
+    private static final String CFG_SPEED = "musicplayer.speed";
+    private static final String CFG_AB_A = "musicplayer.ab.a";
+    private static final String CFG_AB_B = "musicplayer.ab.b";
 
     private static final String[] INTERNAL_KEYS = {
         "game1","game2","game3","game4","game5","game6","game7","game8","game9",
         "boss1","boss2","fine","editor","menu","land","launch"
     };
 
-    private static final Pattern EXT_WHITELIST = Pattern.compile("(?i)\\.(ogg|mp3|wav)$");
+    private static final Pattern EXT_WHITELIST = Pattern.compile("(?i)\\.(ogg|mp3|wav|flac|m4a|wma|aac|opus)$");
     private static final String CACHE_DIR = "music/";
     /** 声场衰减参考半径（格）：距离超过该值基本听不见 */
     static final float FALLOFF_RADIUS = 900f;
@@ -60,11 +65,36 @@ public class MusicPlayer {
     private static boolean enabled = true;
     private static float volume = 0.8f;
     private static float pitch = 1f;
+    /** 倍速（相对播放速率 0.1–16x）；与音高叠加为实际 Soloud 速率 pitch*speed */
+    private static float speed = 1f;
     private static int loopMode = LOOP_LIST;
+
+    /** A-B 区间两点（秒）；<0 表示未设置。两点按 min/max 取区间，可实现区间重复 */
+    private static float abA = -1f;
+    private static float abB = -1f;
+
+    /** 专辑：一组曲目（存放曲目 cacheHash 引用），可按专辑整体播放 */
+    public static class Album {
+        public String name;
+        public Seq<String> hashes = new Seq<>();
+        public Album() {}
+        public Album(String name) { this.name = name; }
+    }
+
+    private static final Seq<Album> albums = new Seq<>();
+    /** 当前激活的专辑名（null = 全部曲目）；决定「上一首/下一首」在专辑内切换并限定循环范围 */
+    private static String activeAlbum = null;
 
     private static boolean playing = false;
     private static int localVoiceId = -1;
     private static float lastBlip = 0;
+    /** 暂停时保存的进度（秒）；恢复播放时 seek 回该位置 */
+    private static float pausedPosition = 0f;
+    /** 游戏自身暂停（ESC 菜单）期间：Mindustry 会静音本播声源，但流式声源内部仍在计时 → 进度虚进。
+     *  为 true 时显示进度被冻结在 pausedPosition，待游戏恢复时 seek 回该处保持进度与音频一致 */
+    private static boolean pausedByGame = false;
+    /** 已解析文件绝对路径 → 时长（秒）缓存，避免反复用 Music.create 读取耗时 */
+    private static final ObjectMap<String, Float> lengthCache = new ObjectMap<>();
     private static boolean autoAdvancing = false;
     private static boolean initialized = false;
 
@@ -121,11 +151,34 @@ public class MusicPlayer {
         enabled = Core.settings.getBool(CFG_ENABLED, true);
         volume = Core.settings.getFloat(CFG_VOLUME, 0.8f);
         pitch = Core.settings.getFloat(CFG_PITCH, 1f);
+        speed = Core.settings.getFloat(CFG_SPEED, 1f);
         loopMode = Core.settings.getInt(CFG_LOOP, LOOP_LIST);
         current = Core.settings.getInt(CFG_LAST, -1);
+        abA = Core.settings.getFloat(CFG_AB_A, -1f);
+        abB = Core.settings.getFloat(CFG_AB_B, -1f);
         loadTracks();
+        loadAlbums();
+        String alb = Core.settings.getString(CFG_ALBUM, "");
+        activeAlbum = (alb == null || alb.isEmpty()) ? null : alb;
 
         Events.run(EventType.Trigger.update, MusicPlayer::update);
+    }
+
+    private static void loadAlbums() {
+        albums.clear();
+        String raw = Core.settings.getString(CFG_ALBUMS, "");
+        if (raw != null && !raw.isEmpty()) {
+            try {
+                Album[] arr = json.fromJson(Album[].class, raw);
+                if (arr != null) albums.addAll(arr);
+            } catch (Exception e) {
+                albums.clear();
+            }
+        }
+    }
+
+    private static void saveAlbums() {
+        Core.settings.put(CFG_ALBUMS, json.toJson(albums, Album[].class, Album.class));
     }
 
     private static void loadTracks() {
@@ -143,6 +196,99 @@ public class MusicPlayer {
 
     private static void saveTracks() {
         Core.settings.put(CFG_TRACKS, json.toJson(tracks, MusicTrack[].class, MusicTrack.class));
+    }
+
+    // ------------------------------------------------------------------
+    // 专辑（曲目分组）
+    // ------------------------------------------------------------------
+
+    /** 全部专辑（含未命名曲目的默认组返回 null → 表示全部曲目） */
+    public static Seq<Album> albums() {
+        return albums;
+    }
+
+    public static Album album(int index) {
+        return (index >= 0 && index < albums.size) ? albums.get(index) : null;
+    }
+
+    public static void addAlbum(String name) {
+        if (name == null || name.trim().isEmpty()) return;
+        albums.add(new Album(name.trim()));
+        saveAlbums();
+    }
+
+    public static void removeAlbum(int index) {
+        if (index < 0 || index >= albums.size) return;
+        albums.remove(index);
+        saveAlbums();
+        if (activeAlbum != null && !existsAlbum(activeAlbum)) activeAlbum = null;
+    }
+
+    private static boolean existsAlbum(String name) {
+        for (Album a : albums) if (name.equals(a.name)) return true;
+        return false;
+    }
+
+    public static void addToAlbum(int albumIndex, int trackIndex) {
+        Album a = album(albumIndex);
+        if (a == null || trackIndex < 0 || trackIndex >= tracks.size) return;
+        a.hashes.addAll(tracks.get(trackIndex).cacheHash);
+        saveAlbums();
+    }
+
+    public static void removeFromAlbum(int albumIndex, int trackIndex) {
+        Album a = album(albumIndex);
+        if (a == null || trackIndex < 0 || trackIndex >= tracks.size) return;
+        a.hashes.remove(tracks.get(trackIndex).cacheHash);
+        saveAlbums();
+    }
+
+    /** 当前激活专辑名（null = 全部曲目） */
+    public static String activeAlbum() {
+        return activeAlbum;
+    }
+
+    public static void setActiveAlbum(String name) {
+        activeAlbum = (name == null || name.isEmpty()) ? null : name;
+        Core.settings.put(CFG_ALBUM, activeAlbum == null ? "" : activeAlbum);
+        // 当前曲目不再属于激活专辑 → 跳到该专辑第一首（若有），否则停止
+        MusicTrack cur = currentTrack();
+        if (activeAlbum != null && cur != null && !albumContainsByName(activeAlbum, cur.cacheHash)) {
+            int first = firstTrackOfAlbum(activeAlbum);
+            if (first >= 0) play(first);
+            else stop();
+        }
+    }
+
+    /** 指定专辑内曲目当前顺序（按曲目库序）的索引列表 */
+    public static int[] albumTrackIndices(String albumName) {
+        Seq<Integer> out = new Seq<>();
+        for (int i = 0; i < tracks.size; i++) {
+            if (albumName != null && !albumContainsByName(albumName, tracks.get(i).cacheHash)) continue;
+            out.add(i);
+        }
+        int[] res = new int[out.size];
+        for (int i = 0; i < out.size; i++) res[i] = out.get(i);
+        return res;
+    }
+
+    private static int firstTrackOfAlbum(String albumName) {
+        int[] ind = albumTrackIndices(albumName);
+        return ind.length > 0 ? ind[0] : -1;
+    }
+
+    private static boolean albumContainsByName(String albumName, String hash) {
+        for (Album a : albums) {
+            if (!albumName.equals(a.name)) continue;
+            if (a.hashes.contains(hash)) return true;
+        }
+        return false;
+    }
+
+    /** 激活专辑的首/末曲索引；null 专辑（全部曲目）返还 true */
+    private static int[] currentScope() {
+        if (activeAlbum == null) return null;
+        return albumTrackIndices(activeAlbum);
     }
 
     // ------------------------------------------------------------------
@@ -181,12 +327,29 @@ public class MusicPlayer {
     private static void update() {
         if (!initialized || !enabled) return;
         if (player == null) return;
+        // 游戏从暂停恢复后：若曾因游戏暂停冻结进度（暂停期间被静音但流式源虚进），seek 回冻结点，取消冻结标记
+        if (pausedByGame && !isGamePaused()) {
+            pausedByGame = false;
+            if (localVoiceId >= 0 && pausedPosition > 0f) seek(pausedPosition);
+        }
         tickLocal();
         refreshVolumes();
     }
 
+    private static boolean isGamePaused() {
+        return mindustry.Vars.state != null && mindustry.Vars.state.isPaused();
+    }
+
     private static void tickLocal() {
         if (!playing || localVoiceId < 0) return;
+        // A-B 区间循环：进度到达 B 点（hi）后回转到 A 点（lo），实现区间重复
+        if (hasAb()) {
+            float pos = currentTime();
+            float hi = Math.max(abA, abB);
+            if (pos >= hi) {
+                seek(Math.min(abA, abB));
+            }
+        }
         // 仍在播放（含暂停态，暂停时 Soloud 的 id 仍有效）→ 复位推进守卫
         if (Core.audio.isPlaying(localVoiceId)) {
             autoAdvancing = false;
@@ -215,9 +378,23 @@ public class MusicPlayer {
     }
 
     private static boolean advanceSafely(int delta) {
-        if (tracks.size == 0) return false;
+        // 激活专辑时只在专辑内切换；否则全曲目库切换
+        int[] scope = currentScope();
+        int size = (scope == null) ? tracks.size : scope.length;
+        if (size == 0) return false;
+        // 当前曲目在当前作用域内的位置；若不在（如新增曲目/换专辑）则从头
+        int pos = 0;
+        if (current >= 0) {
+            if (scope == null) pos = current;
+            else {
+                for (int i = 0; i < scope.length; i++) if (scope[i] == current) { pos = i; break; }
+            }
+        }
+        pausedPosition = 0f;
+        clearAb();
         stopLocal();
-        current = ((current + delta) % tracks.size + tracks.size) % tracks.size;
+        int nextPos = ((pos + delta) % size + size) % size;
+        current = (scope == null) ? nextPos : scope[nextPos];
         Core.settings.put(CFG_LAST, current);
         beginPlayback(current);
         return playing;
@@ -240,10 +417,12 @@ public class MusicPlayer {
                 v.lastX = player.x;
                 v.lastY = player.y;
             }
-            float vol = calcListenVolume(v.lastX - player.x, v.lastY - player.y);
+            // 本机恒在声源处 → 全音量；远程才做距离衰减。修复：本机音量不再乘以 0.12 的 BASE_VOLUME，避免几乎听不见。
+            float vol = v.isLocalOwner ? volume : calcListenVolume(v.lastX - player.x, v.lastY - player.y);
             float pan = calcListenPan(v.lastX);
-            // set(voiceId, volume, pan) 同时更新音量与左右声像（0=中，负=左，正=右）
-            Core.audio.set(v.voiceId, vol, pan);
+            // set(voiceId, pan, volume) 同时更新左右声像与音量（arc 中第2参为 pan、第3参为 volume；
+            // 反向传入会把 pan 当 volume，声源在屏幕中央(pan≈0)时音量≈0 → 听不到声音）
+            Core.audio.set(v.voiceId, pan, vol);
         }
     }
 
@@ -342,10 +521,14 @@ public class MusicPlayer {
 
     public static void removeTrack(int index) {
         if (index < 0 || index >= tracks.size) return;
+        String hash = tracks.get(index).cacheHash;
         if (current == index) stopLocal();
         if (current > index) current--;
         tracks.remove(index);
         saveTracks();
+        // 同步清理专辑中对该曲目的引用，避免孤悬 hash
+        for (Album a : albums) a.hashes.remove(hash);
+        saveAlbums();
     }
 
     // ------------------------------------------------------------------
@@ -363,6 +546,8 @@ public class MusicPlayer {
     public static void play(int index) {
         if (!enabled) return;
         if (index < 0 || index >= tracks.size) return;
+        pausedPosition = 0f;
+        clearAb();
         stopLocal();
         current = index;
         Core.settings.put(CFG_LAST, current);
@@ -392,10 +577,18 @@ public class MusicPlayer {
             SiliconLog.log("Cannot resolve " + (t == null ? "?" : t.name) + " to a local file");
             return;
         }
+        // 内置曲目是 jar 打包资源，无真实磁盘路径，Soloud 无法流式读取 → 先提取为真实缓存文件
+        if (t.isInternal()) {
+            file = extractInternalToRealFile(file, t.source);
+            if (file == null) {
+                SiliconLog.log("Cannot extract internal track " + t.name);
+                return;
+            }
+        }
         Sound snd = null;
         try {
             snd = Sound.createStream(file);
-            int id = snd.play(calcListenVolume(0f, 0f), pitch, 0f);
+            int id = snd.play(volume, pitch * speed, 0f);
             Core.audio.setLooping(id, loopMode == LOOP_ONE);
             localVoiceId = id;
             playing = true;
@@ -439,22 +632,26 @@ public class MusicPlayer {
     }
 
     public static void pause() {
-        if (localVoiceId >= 0) Core.audio.setPaused(localVoiceId, true);
-        playing = false;
+        if (!playing) return;
+        if (localVoiceId >= 0) pausedPosition = currentTime();
+        // 流式声源的 setPaused 并不总能真的静音（音乐仍会继续），故暂停实现为：
+        // 真正 stop 本地声源保证不再出声，并记录进度，供恢复时 seek 回原位。
+        stopLocal();
         bcast("pause");
     }
 
     public static void resume() {
         if (!enabled) return;
         if (playing) return;
-        if (localVoiceId >= 0) {
-            Core.audio.setPaused(localVoiceId, false);
-            playing = true;
-            lastBlip = Time.time;
-            bcast("resume");
-        } else if (current >= 0) {
+        if (current >= 0) {
+            float seekTo = pausedPosition;
+            pausedPosition = 0f;
             beginPlayback(current);
-            if (playing) bcast("play");
+            if (playing && seekTo > 0.05f) {
+                float len = trackLength();
+                seek(Math.min(seekTo, len > 0f ? Math.max(0f, len - 0.5f) : seekTo));
+            }
+            if (playing) bcast(seekTo > 0.05f ? "resume" : "play");
         }
     }
 
@@ -476,7 +673,7 @@ public class MusicPlayer {
     public static void setVolume(float v) {
         volume = clamp(v, 0f, 1f);
         Core.settings.put(CFG_VOLUME, volume);
-        if (localVoiceId >= 0) Core.audio.setVolume(localVoiceId, calcListenVolume(0f, 0f));
+        if (localVoiceId >= 0) Core.audio.setVolume(localVoiceId, volume);
         refreshVolumes();
     }
 
@@ -487,14 +684,202 @@ public class MusicPlayer {
     public static void setPitch(float p) {
         pitch = p;
         Core.settings.put(CFG_PITCH, pitch);
-        if (localVoiceId >= 0) Core.audio.setPitch(localVoiceId, pitch);
-        for (Voice v : voices) {
-            if (v.voiceId >= 0) Core.audio.setPitch(v.voiceId, pitch);
-        }
+        applyRate();
     }
 
     public static float pitch() {
         return pitch;
+    }
+
+    /** 当前倍速 */
+    public static float speed() {
+        return speed;
+    }
+
+    /** 设置倍速（0.1–16x）；与音高叠加，实际速率 = pitch * speed */
+    public static void setSpeed(float s) {
+        speed = clamp(s, 0.1f, 16f);
+        Core.settings.put(CFG_SPEED, speed);
+        applyRate();
+    }
+
+    /** 把「音高 * 倍速」的实际速率应用到本机与所有远程声源 */
+    private static void applyRate() {
+        float eff = pitch * speed;
+        if (localVoiceId >= 0) Core.audio.setPitch(localVoiceId, eff);
+        for (Voice v : voices) {
+            if (v.voiceId >= 0) Core.audio.setPitch(v.voiceId, eff);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // A-B 区间（区间重复）
+    // ------------------------------------------------------------------
+
+    public static float abA() {
+        return abA;
+    }
+
+    public static float abB() {
+        return abB;
+    }
+
+    /** 是否已设置有效 A-B 区间（两点均已设且相距 > 0.3s） */
+    public static boolean hasAb() {
+        return abA >= 0f && abB >= 0f && Math.abs(abB - abA) > 0.3f;
+    }
+
+    /** 设 A 点（秒）；B 已设为更早位置时不强制顺序，由 hasAb 用 min/max 处理 */
+    public static void setAbA(float seconds) {
+        abA = seconds < 0f ? -1f : seconds;
+        Core.settings.put(CFG_AB_A, abA);
+    }
+
+    /** 设 B 点（秒） */
+    public static void setAbB(float seconds) {
+        abB = seconds < 0f ? -1f : seconds;
+        Core.settings.put(CFG_AB_B, abB);
+    }
+
+    /** 清除 A-B 区间 */
+    public static void clearAb() {
+        abA = -1f;
+        abB = -1f;
+        Core.settings.put(CFG_AB_A, -1f);
+        Core.settings.put(CFG_AB_B, -1f);
+    }
+
+    /** 切换 A-B 区间：无区间则设置，有则清除（悬浮条/设置按钮快捷开关） */
+    public static void toggleAb() {
+        if (hasAb()) clearAb();
+        else {
+            if (!playing || localVoiceId < 0) return;
+            float pos = currentTime();
+            // 已设 A 未设 B → 设 B
+            if (abA >= 0f && abB < 0f) setAbB(pos);
+            else setAbA(pos); // 未设或已设 B 未设 A → 重新设 A
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 播放进度 / 拖动选进度
+    // ------------------------------------------------------------------
+
+    /** 当前播放进度（秒）；本地未播放返回 0。游戏自身暂停（ESC）期间流式源虚进而音频被静音 → 返回冻结的进度 */
+    public static float currentTime() {
+        if (pausedByGame) return pausedPosition;
+        if (localVoiceId >= 0) return SoloudBridge.getPosition(localVoiceId);
+        // 播放器暂停后 localVoiceId=-1，返回保存的进度
+        return pausedPosition > 0f ? pausedPosition : 0f;
+    }
+
+    /** 当前本地曲目总时长（秒）；未知/未播放返回 -1 */
+    public static float trackLength() {
+        if (localVoiceId >= 0) {
+            for (Voice v : voices) {
+                if (v.isLocalOwner && v.sound != null) return v.sound.getLength();
+            }
+        }
+        if (current >= 0) return trackLengthOf(tracks.get(current));
+        return -1f;
+    }
+
+    /** 指定曲目时长（秒）；未知返回 -1。本地曲目优先读原始文件（避免无谓的全文件异步缓存拷贝造成卡顿），
+     *  非 ASCII 路径读取失败时回退到已有 ASCII 缓存（若无则不拷贝，返回 -1，播放后将填充）。结果按路径缓存。 */
+    public static float trackLengthOf(MusicTrack t) {
+        if (t == null) return -1f;
+        // 内部曲目：必须提取为真实磁盘文件才能读取时长
+        if (t.isInternal()) {
+            Fi f = extractInternalToRealFile(resolveToPlayableFile(t), t.source);
+            return f == null ? -1f : readLengthFrom(f);
+        }
+        if (t.isUrl()) {
+            Fi f = resolveToPlayableFile(t);
+            return f == null ? -1f : readLengthFrom(f);
+        }
+        // 本地曲目：直接读原始文件（长度/大小都不需要拷贝）；路径 ASCII 也满足
+        Fi orig = originalLocalFile(t);
+        float len = orig == null ? -1f : readLengthFrom(orig);
+        // 非 ASCII 原始路径读取失败 → 回退已有 ASCII 缓存（不做新拷贝）
+        if (len <= 0f) {
+            Fi cached = cacheFileOf(t);
+            if (cached != null && cached.exists()) len = readLengthFrom(cached);
+        }
+        return len;
+    }
+
+    /** 从指定文件读取时长（秒）；失败返回 -1，结果按文件路径缓存。
+     *  注意：Soloud 的 Music.create 对含非 ASCII（如中文）路径会原生 fopen 失败并可能使音频内部锁不一致 → 直接跳过，避免崩溃 */
+    private static float readLengthFrom(Fi f) {
+        if (f == null || !f.exists()) return -1f;
+        String key = f.absolutePath();
+        if (!isAsciiPath(key)) return -1f; // 非 ASCII 路径不读（防 Soloud 内部锁崩溃），由 ASCII 缓存补齐
+        Float cached = lengthCache.get(key);
+        if (cached != null) return cached;
+        float len = -1f;
+        try {
+            arc.audio.Music m = arc.audio.Music.create(f);
+            try {
+                len = m.getLength();
+            } finally {
+                m.dispose();
+            }
+        } catch (Exception ignored) {
+        }
+        lengthCache.put(key, len);
+        return len;
+    }
+
+    /** 路径是否全为 ASCII（可安全交给 Soloud 原生 fopen） */
+    private static boolean isAsciiPath(String path) {
+        if (path == null) return false;
+        for (int i = 0; i < path.length(); i++) {
+            char c = path.charAt(i);
+            if (c > 0x7f) return false;
+        }
+        return true;
+    }
+
+    /** 指定曲目本地文件大小（字节）；不可用时返回 -1。本地曲目直接读原始文件，不触发缓存拷贝 */
+    public static long trackSizeOf(MusicTrack t) {
+        if (t == null) return -1L;
+        if (t.isInternal()) {
+            Fi f = extractInternalToRealFile(resolveToPlayableFile(t), t.source);
+            return f != null && f.exists() ? f.length() : -1L;
+        }
+        if (t.isLocal()) {
+            Fi orig = originalLocalFile(t);
+            if (orig != null && orig.exists()) return orig.length();
+            Fi c = cacheFileOf(t);
+            return c != null && c.exists() ? c.length() : -1L;
+        }
+        Fi f = resolveToPlayableFile(t);
+        return f != null && f.exists() ? f.length() : -1L;
+    }
+
+    /** 解析本地曲目的原始源文件（不做任何缓存拷贝）；不存在返回 null */
+    public static Fi originalLocalFile(MusicTrack t) {
+        if (t == null || !t.isLocal() || t.source == null) return null;
+        Fi abs = Core.files.absolute(t.source);
+        if (abs.exists()) return abs;
+        Fi loc = Core.files.local(t.source);
+        return loc.exists() ? loc : null;
+    }
+
+    /** 相对当前进度增减（秒）：暂停态/游戏暂停态改保存进度，播放态 seek 并夹取在范围内 */
+    public static void seekRelative(float delta) {
+        float len = trackLength();
+        float pos = currentTime() + delta;
+        if (len > 0f) pos = arc.math.Mathf.clamp(pos, 0f, Math.max(0f, len - 0.3f));
+        else pos = Math.max(0f, pos);
+        seek(pos);
+    }
+
+    /** 拖动到指定进度（秒）：播放中直接 seek 流式声源；播放器暂停时只改保存进度（恢复后从该处继续） */
+    public static void seek(float seconds) {
+        if (seconds < 0f) seconds = 0f;
+        pausedPosition = seconds;
+        if (localVoiceId >= 0) SoloudBridge.seek(localVoiceId, seconds);
     }
 
     public static void setLoopMode(int mode) {
@@ -548,13 +933,36 @@ public class MusicPlayer {
         Fi cached = cacheFileOf(t);
         if (cached != null && cached.exists()) return cached;
         if (t.isLocal()) {
+            Fi src = null;
             Fi abs = Core.files.absolute(t.source);
-            if (abs.exists()) return abs;
-            Fi loc = Core.files.local(t.source);
-            if (loc.exists()) return loc;
-            return null;
+            if (abs.exists()) src = abs;
+            else {
+                Fi loc = Core.files.local(t.source);
+                if (loc.exists()) src = loc;
+            }
+            if (src == null) return null;
+            // Soloud 原生 fopen 无法读取含中文/非 ASCII 字符的路径（Windows fopen 用 ANSI 编码），
+            // 也依赖扩展名解码。统一把本地文件复制到 ASCII 安全的缓存路径 <hash>.<真实ext> 后再播放。
+            Fi safe = localAsciiCopy(t, src);
+            return safe != null ? safe : src;
         }
         return null; // URL 未缓存由网络层下载
+    }
+
+    /** 把本地文件内容复制到 ASCII 安全的缓存路径（<hash>.<ext>），供 Soloud 流式读取；失败返回 null */
+    private static Fi localAsciiCopy(MusicTrack t, Fi src) {
+        try {
+            Fi out = cacheFileForHash(t.cacheHash, extensionFrom(t.source));
+            if (out.exists()) return out;
+            out.parent().mkdirs();
+            // 避免超大文件一次性读入内存：用流拷贝到缓存
+            out.write(src.read(), false);
+            hashExt.put(t.cacheHash, extensionFrom(t.source));
+            return out.exists() ? out : null;
+        } catch (Exception e) {
+            SiliconLog.log("Local ascii-copy fail " + t.name + ": " + e.getMessage());
+            return null;
+        }
     }
 
     private static arc.audio.Music internalMusic(String key) {
@@ -562,6 +970,29 @@ public class MusicPlayer {
             java.lang.reflect.Field f = mindustry.gen.Musics.class.getField(key);
             return (arc.audio.Music) f.get(null);
         } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 将 jar 打包的内置音频资源提取为真实磁盘缓存文件（Soloud 只能按磁盘路径流式读取）。
+     * 以 source 键缓存，仅首次提取一次；返回可直接 createStream 的真实 Fi，失败返回 null。
+     */
+    private static Fi extractInternalToRealFile(Fi jarFile, String key) {
+        if (jarFile == null) return null;
+        try {
+            String name = jarFile.name();
+            String ext = (name != null && name.contains("."))
+                    ? name.substring(name.lastIndexOf('.')) : ".ogg";
+            Fi out = Core.files.cache(CACHE_DIR + "int-" + key + ext);
+            if (!out.exists()) {
+                byte[] data = jarFile.readBytes();
+                if (data == null || data.length == 0) return null;
+                out.writeBytes(data, false);
+            }
+            return out.exists() ? out : null;
+        } catch (Exception e) {
+            SiliconLog.log("Extract internal " + key + " fail: " + e.getMessage());
             return null;
         }
     }
@@ -678,6 +1109,10 @@ public class MusicPlayer {
             if (e.equals(".mp3")) return ".mp3";
             if (e.equals(".wav")) return ".wav";
             if (e.equals(".flac")) return ".flac";
+            if (e.equals(".m4a")) return ".m4a";
+            if (e.equals(".wma")) return ".wma";
+            if (e.equals(".aac")) return ".aac";
+            if (e.equals(".opus")) return ".opus";
         }
         return ".ogg";
     }
@@ -732,6 +1167,13 @@ public class MusicPlayer {
             SiliconLog.log("Remote play: no local file for " + hash);
             return; // 尚未下载/尚未拿到二进制，等下载完成后由网络层再次调用
         }
+        if (t != null && t.isInternal()) {
+            file = extractInternalToRealFile(file, t.source);
+            if (file == null) {
+                SiliconLog.log("Remote play: cannot extract internal " + hash);
+                return;
+            }
+        }
         Sound snd = null;
         try {
             snd = Sound.createStream(file);
@@ -740,7 +1182,7 @@ public class MusicPlayer {
             v.hash = hash;
             v.isLocalOwner = false;
             v.sound = snd;
-            int id = snd.play(calcListenVolume(ownerX - player.x, ownerY - player.y), pitch, 0f);
+            int id = snd.play(calcListenVolume(ownerX - player.x, ownerY - player.y), pitch * speed, 0f);
             v.voiceId = id;
             Core.audio.setLooping(id, false);
             v.lastX = ownerX;
@@ -766,7 +1208,7 @@ public class MusicPlayer {
             if (!v.isLocalOwner && ownerUuid.equals(v.ownerUuid)) {
                 v.lastX = x;
                 v.lastY = y;
-                Core.audio.set(v.voiceId, calcListenVolume(x - player.x, y - player.y), calcListenPan(x));
+                Core.audio.set(v.voiceId, calcListenPan(x), calcListenVolume(x - player.x, y - player.y));
                 return;
             }
         }
@@ -816,6 +1258,46 @@ public class MusicPlayer {
     private static final class SiliconLog {
         static void log(String msg) {
             Log.info("[SiliconMusic] " + msg);
+        }
+    }
+
+    /**
+     * 通过反射调用 arc.audio.Soloud 的包私有 native 方法读取/定位流式播放进度。
+     * arc 未对 Sound.createStream 暴露 seek/position 公共 API，而 arc.audio.Music 提供；
+     * 这里保留 Sound 流式播放（与远程 mp-pos 广播的 voiceId 模型一致）的前提下，
+     * 仅读取/写入本地 voice 的进度，避免为 seek 重构整套播放模型。
+     */
+    private static final class SoloudBridge {
+        private static final java.lang.reflect.Method GET_POS;
+        private static final java.lang.reflect.Method SEEK;
+
+        static {
+            java.lang.reflect.Method gp = null, sk = null;
+            try {
+                Class<?> c = Class.forName("arc.audio.Soloud");
+                gp = c.getDeclaredMethod("idPosition", int.class);
+                gp.setAccessible(true);
+                sk = c.getDeclaredMethod("idSeek", int.class, float.class);
+                sk.setAccessible(true);
+            } catch (Throwable ignored) {
+            }
+            GET_POS = gp;
+            SEEK = sk;
+        }
+
+        static float getPosition(int voiceId) {
+            try {
+                if (GET_POS != null) return (Float) GET_POS.invoke(null, voiceId);
+            } catch (Throwable ignored) {
+            }
+            return 0f;
+        }
+
+        static void seek(int voiceId, float seconds) {
+            try {
+                if (SEEK != null) SEEK.invoke(null, voiceId, seconds);
+            } catch (Throwable ignored) {
+            }
         }
     }
 }
