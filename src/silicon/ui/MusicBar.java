@@ -3,6 +3,8 @@ package silicon.ui;
 import arc.Core;
 import arc.Events;
 import arc.graphics.Color;
+import arc.graphics.g2d.Draw;
+import arc.graphics.g2d.Fill;
 import arc.math.Mathf;
 import arc.scene.Element;
 import arc.scene.event.InputEvent;
@@ -90,7 +92,13 @@ public class MusicBar {
             ImageButton play = new ImageButton(MusicPlayer.isPlaying() ? Icon.pause : Icon.play, Styles.flati);
             play.resizeImage(Scl.scl(22f));
             play.getImage().setColor(MusicPlayer.isPlaying() ? Pal.accent : Color.white);
-            play.clicked(() -> { if (MusicPlayer.isPlaying()) MusicPlayer.pause(); else MusicPlayer.resume(); });
+            play.clicked(() -> {
+                if (MusicPlayer.isPlaying()) MusicPlayer.pause(); else MusicPlayer.resume();
+                // 点击即同步图标/颜色（不依赖下一帧 update 才切换）
+                boolean p = MusicPlayer.isPlaying();
+                play.getImage().setDrawable(p ? Icon.pause : Icon.play);
+                play.getImage().setColor(p ? Pal.accent : Color.white);
+            });
             final boolean[] wasPlaying = {MusicPlayer.isPlaying()};
             final arc.scene.ui.ImageButton ip = play;
             play.update(() -> {
@@ -113,6 +121,7 @@ public class MusicBar {
             TextButton speedBtn = new TextButton(speedLabel(), Styles.flatBordert);
             speedBtn.getLabel().setWrap(false);
             speedBtn.getLabel().setEllipsis(true);
+            speedBtn.getLabel().setFontScale(Scl.scl(0.9f));
             speedBtn.setColor(Pal.accent);
             final String[] lastSpeed = {speedLabel()};
             speedBtn.update(() -> {
@@ -126,12 +135,13 @@ public class MusicBar {
                 MusicPlayer.setSpeed(next);
                 speedBtn.setText(speedLabel());
             });
-            bar.add(speedBtn).width(Scl.scl(56f)).pad(1f);
+            bar.add(speedBtn).width(Scl.scl(64f)).pad(1f);
 
             // 专辑作用域切换按钮：点按在「全部曲目」与各专辑间轮换；长按/双击由设置页管理
             TextButton albumBtn = new TextButton(albumScopeLabel(), Styles.flatBordert);
             albumBtn.getLabel().setWrap(false);
             albumBtn.getLabel().setEllipsis(true);
+            albumBtn.getLabel().setFontScale(Scl.scl(0.9f));
             albumBtn.setColor(Pal.accent);
             final String[] lastScope = {albumScopeLabel()};
             albumBtn.update(() -> {
@@ -143,7 +153,7 @@ public class MusicBar {
                 lastScope[0] = albumScopeLabel();
                 albumBtn.setText(lastScope[0]);
             });
-            bar.add(albumBtn).growX().width(Scl.scl(96f)).pad(1f);
+            bar.add(albumBtn).width(Scl.scl(112f)).pad(1f);
 
             // 设置按钮：打开音乐播放器设置页
             iconBtn(bar, Icon.settings, MusicPlayerDialog::open).pad(1f);
@@ -152,9 +162,10 @@ public class MusicBar {
             iconBtn(bar, Icon.down, () -> { collapsed = true; detach(); }).pad(1f);
 
             bar.row();
-            // 曲名（可点开设置页）
+            // 曲名（可点开设置页）：单行 + 省略号，杜绝长名换行导致行高变化并挤压下方进度条
             arc.scene.ui.Label track = new arc.scene.ui.Label(trackLabel(), Styles.outlineLabel);
             track.setColor(Color.white);
+            track.setWrap(false);
             track.setEllipsis(true);
             track.tapped(() -> MusicPlayerDialog.open());
             final String[] lastTrack = {trackLabel()};
@@ -166,8 +177,8 @@ public class MusicBar {
             bar.add(track).growX().pad(2f, 6f, 2f, 6f).colspan(10);
 
             bar.row();
-            // 进度条（独立一行，给足高度与上下留白，避免滑杆圆钮越界遮挡上方曲名/按钮文字）
-            bar.add(seekSlider()).growX().height(Scl.scl(18f)).colspan(10).pad(3f, 6f, 3f, 6f);
+            // 进度条（独立一行，加高并上下留白，避免滑杆圆钮越界遮挡上方曲名/按钮文字）
+            bar.add(seekSlider()).growX().height(Scl.scl(24f)).colspan(10).pad(3f, 6f, 3f, 6f);
             // 展开态多了一行 → 需要多 rebuild 一次，交给 update 的空重建逻辑
         }
 
@@ -179,6 +190,8 @@ public class MusicBar {
         float x = Core.settings.has(CFG_X) ? Core.settings.getFloat(CFG_X) : Core.graphics.getWidth() - bar.getWidth() - Scl.scl(10f);
         float y = Core.settings.has(CFG_Y) ? Core.settings.getFloat(CFG_Y) : Scl.scl(16f);
         bar.setPosition(x, y);
+        // 屏幕尺寸变化后夹取在可视范围内（重置位置后/窗口缩放后不至于把条夹到屏幕外导致长度观感异常）
+        moveBar(0f, 0f);
 
         Core.scene.root.addChild(bar);
     }
@@ -191,9 +204,10 @@ public class MusicBar {
         return parent.add(b).size(Scl.scl(32f));
     }
 
-    /** 悬浮条/弹窗共用的可拖动进度条（内联 update+changed 监听，返回构造好的 Slider） */
+    /** 悬浮条/弹窗共用的可拖动进度条（内联 update+changed 监听，返回构造好的 Slider）；
+     *  带 A-B 区间高亮带：进度条上半透明色带标出 [A,B] 区间，便于区间重复可视化 */
     private static arc.scene.ui.Slider seekSlider() {
-        arc.scene.ui.Slider seekBar = new arc.scene.ui.Slider(0f, 1f, 0.001f, false);
+        arc.scene.ui.Slider seekBar = new AbSlider();
         seekBar.setDisabled(true);
         final boolean[] userSeek = {false};
         seekBar.update(() -> {
@@ -215,6 +229,33 @@ public class MusicBar {
             }
         });
         return seekBar;
+    }
+
+    /** 带 A-B 区间高亮带的进度滑块：在轨道上叠一层半透明色带标出区间范围（无区间时不画） */
+    static class AbSlider extends arc.scene.ui.Slider {
+        AbSlider() {
+            super(0f, 1f, 0.001f, false);
+        }
+
+        @Override
+        public void draw() {
+            if (MusicPlayer.hasAb()) {
+                float len = MusicPlayer.trackLength();
+                if (len > 0f) {
+                    float lo = Math.min(MusicPlayer.abA(), MusicPlayer.abB()) / len;
+                    float hi = Math.max(MusicPlayer.abA(), MusicPlayer.abB()) / len;
+                    float w = this.x + this.width;
+                    float x0 = this.x + Scl.scl(4f) + lo * (w - this.x - Scl.scl(8f));
+                    float x1 = this.x + Scl.scl(4f) + hi * (w - this.x - Scl.scl(8f));
+                    float mid = this.y + this.height / 2f;
+                    float th = Math.max(Scl.scl(3f), Math.min(Scl.scl(6f), this.height * 0.5f));
+                    Draw.color(Pal.accent, 0.55f);
+                    Fill.crect(x0, mid - th / 2f, x1 - x0, th);
+                    Draw.reset();
+                }
+            }
+            super.draw();
+        }
     }
 
     /** 给元素挂拖动监听（用于收起态音符按钮：既能拖动也能单击展开）：

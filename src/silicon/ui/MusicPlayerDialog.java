@@ -113,7 +113,7 @@ public class MusicPlayerDialog extends BaseDialog {
             final arc.scene.ui.Label time = new arc.scene.ui.Label("0:00 / 0:00", Styles.outlineLabel);
             time.setColor(Color.white);
             seek.add(time).growX();
-            Slider seekBar = new Slider(0f, 1f, 0.001f, false);
+            Slider seekBar = new MusicBar.AbSlider();
             seekBar.setDisabled(true);
             final boolean[] userSeek = {false};
             seekBar.update(() -> {
@@ -208,7 +208,7 @@ public class MusicPlayerDialog extends BaseDialog {
                 });
                 vol.changed(() -> MusicPlayer.setVolume(vol.getValue()));
                 vp.add(vol).growX().width(Scl.scl(120f));
-                vp.add(volVal).width(Scl.scl(36f)).right().padLeft(4f);
+                vp.add(volVal).width(Scl.scl(52f)).right().padLeft(4f);
             }).growX();
             // 音高面板
             analog.table(pp -> {
@@ -226,7 +226,7 @@ public class MusicPlayerDialog extends BaseDialog {
                 });
                 pit.changed(() -> MusicPlayer.setPitch(pit.getValue()));
                 pp.add(pit).growX().width(Scl.scl(120f));
-                pp.add(pitVal).width(Scl.scl(42f)).right().padLeft(4f);
+                pp.add(pitVal).width(Scl.scl(52f)).right().padLeft(4f);
             }).growX();
             // 倍速面板
             analog.table(sp -> {
@@ -246,7 +246,7 @@ public class MusicPlayerDialog extends BaseDialog {
                 });
                 spd.changed(() -> MusicPlayer.setSpeed(cursorToSpeed(spd.getValue())));
                 sp.add(spd).growX().width(Scl.scl(120f));
-                sp.add(spdVal).width(Scl.scl(42f)).right().padLeft(4f);
+                sp.add(spdVal).width(Scl.scl(64f)).right().padLeft(4f);
             }).growX();
         }).growX().padTop(2f).row();
 
@@ -347,9 +347,9 @@ public class MusicPlayerDialog extends BaseDialog {
         return Core.bundle.get("musicplayer.abUnset");
     }
 
-    // 倍速对数映射（0.1–16x）：speed = 0.1 * 160^cursor，160 = 16/0.1
-    private static final float LOG_MIN = 0.1f;
-    private static final float LOG_RATIO = 160f;
+    // 倍速对数映射（1/16–16x）：speed = (1/16) * 256^cursor，256 = 16/(1/16)
+    private static final float LOG_MIN = MusicPlayer.MIN_SPEED;
+    private static final float LOG_RATIO = 16f / MusicPlayer.MIN_SPEED;
 
     private static float speedToCursor(float speed) {
         speed = Math.max(LOG_MIN, Math.min(16f, speed));
@@ -393,16 +393,18 @@ public class MusicPlayerDialog extends BaseDialog {
             count++;
             int idx = i;
             boolean isCurrent = current == i;
-            String[] type = {"  [gray](" + Core.bundle.get(t.typeKey) + ")"};
             Table row = new Table();
             if (isCurrent) row.background(Styles.grayPanel);
             row.defaults().pad(2f);
-            // 曲名 + 类型；当前曲高亮
-            TextButton name = new TextButton((isCurrent ? "[accent]> " : "") + t.name + type[0], Styles.flatBordert);
+            // 曲名（单行省略号，占满剩余宽度）→ 长名自动截断，不撑宽按钮破坏对齐
+            TextButton name = new TextButton((isCurrent ? "[accent]> " : "") + t.name, Styles.flatBordert);
             name.getLabel().setWrap(false);
             name.getLabel().setEllipsis(true);
             name.clicked(() -> { MusicPlayer.play(idx); rebuild(); });
             row.add(name).growX().height(Scl.scl(38f));
+            // 类型标签独立固定宽列，右对齐 —— 与曲名分离，列宽稳定不致长名挤压
+            row.add("[gray](" + Core.bundle.get(t.typeKey) + ")").
+                    width(Scl.scl(118f)).right().color(Color.gray);
             // 音频信息：时长 + 文件大小（右对齐固定宽列，保持各行对齐美观）
             row.add(trackInfoLabel(t)).width(Scl.scl(100f)).right().padLeft(8f).padRight(4f).color(Color.gray);
             // 专辑归属按钮：点击弹出「加入/移出专辑」菜单

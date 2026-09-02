@@ -31,7 +31,7 @@ import static mindustry.Vars.player;
  * 本机作为 owner 时，声源原点取玩家自身位置；多人远程声源见 {@link MusicNetwork}，可叠加多个。
  */
 public class MusicPlayer {
-    public static final int LOOP_OFF = 0, LOOP_LIST = 1, LOOP_ONE = 2;
+    public static final int LOOP_OFF = 0, LOOP_LIST = 1, LOOP_ONE = 2, LOOP_SHUFFLE = 3, LOOP_ONE_STOP = 4;
 
     private static final String CFG_TRACKS = "musicplayer.tracks";
     private static final String CFG_VOLUME = "musicplayer.volume";
@@ -51,6 +51,12 @@ public class MusicPlayer {
     };
 
     private static final Pattern EXT_WHITELIST = Pattern.compile("(?i)\\.(ogg|mp3|wav|flac|m4a|wma|aac|opus)$");
+    /** Soloud 内置解码器可解码的格式（stb_vorbis=ogg / dr_mp3=mp3 / stb_wav=wav）。flac/m4a/wma/aac/opus 只能做字节共享，不能在本机解码播放（会原生崩溃） */
+    private static final Pattern DECODABLE_EXT = Pattern.compile("(?i)\\.(ogg|mp3|wav)$");
+    /** 时长探测的文件大小上限（字节）：超过则跳过 Music.create 解码读取，避免大文件解码卡顿/占用过多内存 */
+    private static final long LENGTH_PROBE_SIZE_LIMIT = 64L * 1024 * 1024;
+    /** 倍速最小值（对数滑杆 1/16–16x） */
+    public static final float MIN_SPEED = 1f / 16f;
     private static final String CACHE_DIR = "music/";
     /** 声场衰减参考半径（格）：距离超过该值基本听不见 */
     static final float FALLOFF_RADIUS = 900f;
@@ -106,6 +112,13 @@ public class MusicPlayer {
     /** 待应用的恢复进度（秒）；<0 表示无。resume 后不立即 idSeek（新流式声源可能未就绪，实测即时 seek 会原生崩溃），
      *  推迟到声源确认存活（isPlaying 且在 beginPlayback 后经过 0.3s）再应用 */
     private static float pendingResumeSeek = -1f;
+
+    /** 当前本机声源是否曾确认进入播放态（用于区分「自然播完可推进」与「新声源启动即失败」：
+     *  后者不得静默跳到别的曲目（曾因误判把本地曲跳成内置曲），应停播并留日志 */
+    private static boolean voiceEverPlayed = false;
+    /** 随机循环（LOOP_SHUFFLE）的播放顺序（tracks 索引）；进入随机模式或曲目库/作用域变化时重建 */
+    private static final Seq<Integer> shuffleOrder = new Seq<>();
+    private static boolean shuffleDirty = true;
 
     /** 声源结束检测的静默阈值（秒）：自然播完后等待该时长再推进下一首，避免新声源流式加载未就绪时重复推进 */
     private static final float ADVANCE_DELAY = 0.5f;
@@ -260,6 +273,7 @@ public class MusicPlayer {
     public static void setActiveAlbum(String name) {
         activeAlbum = (name == null || name.isEmpty()) ? null : name;
         Core.settings.put(CFG_ALBUM, activeAlbum == null ? "" : activeAlbum);
+        shuffleDirty = true; // 作用域变化 → 随机播放顺序需重建
         // 当前曲目不再属于激活专辑 → 跳到该专辑第一首（若有），否则停止
         MusicTrack cur = currentTrack();
         if (activeAlbum != null && cur != null && !albumContainsByName(activeAlbum, cur.cacheHash)) {
@@ -385,28 +399,40 @@ public class MusicPlayer {
         // 仍在播放（含暂停态，暂停时 Soloud 的 id 仍有效）→ 复位推进守卫
         if (Core.audio.isPlaying(localVoiceId)) {
             autoAdvancing = false;
+            voiceEverPlayed = true;
             return;
         }
         // 声音已结束（非循环播完或已 stop）
         if (autoAdvancing) return; // 上一条刚触发推进，等新声源就绪，避免重复推进/跳曲
         if (Time.time - lastSeekAt < 1.0f) return; // seek 后声源可能瞬时未就绪，误判已播完会跳歌
-        if (Time.time - lastBlip >= ADVANCE_DELAY) {
-            autoAdvancing = true;
-            lastBlip = Time.time;
-            autoAdvance();
+        if (Time.time - lastBlip < ADVANCE_DELAY) return; // 新声源流式加载未就绪的静默窗口
+        if (!voiceEverPlayed) {
+            // 静默窗口过后仍从未进入播放态 → 启动即失败（解码不支持/缓存损坏/文件缺失）。
+            // 不自动跳到别的曲目（此前会静默推进成「内置歌曲」），停播并留日志便于排查。
+            MusicTrack cur = currentTrack();
+            Log.warn("Playback failed to start, stopped without auto-skip: " + (cur == null ? "?" : cur.name));
+            stopLocal();
+            return;
         }
+        autoAdvancing = true;
+        lastBlip = Time.time;
+        autoAdvance();
     }
 
     private static void autoAdvance() {
-        if (loopMode == LOOP_ONE) {
-            stopLocal();
-            beginPlayback(current);
-            if (playing) bcast("play");
-        } else if (loopMode == LOOP_LIST && tracks.size > 0) {
-            if (advanceSafely(1)) bcast("next");
-        } else {
-            stopLocal();
-            bcast("stop");
+        switch (loopMode) {
+            case LOOP_ONE:
+                stopLocal();
+                beginPlayback(current);
+                if (playing) bcast("play");
+                break;
+            case LOOP_LIST:
+            case LOOP_SHUFFLE:
+                if (advanceSafely(1)) bcast("next");
+                break;
+            default: // LOOP_OFF / LOOP_ONE_STOP：自然播完即停
+                stopLocal();
+                bcast("stop");
         }
     }
 
@@ -426,11 +452,45 @@ public class MusicPlayer {
         pausedPosition = 0f;
         clearAb();
         stopLocal();
-        int nextPos = ((pos + delta) % size + size) % size;
-        current = (scope == null) ? nextPos : scope[nextPos];
+        int nextPos;
+        if (loopMode == LOOP_SHUFFLE) {
+            int[] order = ensureShuffleOrder();
+            size = order.length;
+            if (size == 0) return false;
+            int cur = -1;
+            for (int i = 0; i < order.length; i++) if (order[i] == current) { cur = i; break; }
+            int nxt = cur < 0 ? (delta > 0 ? 0 : order.length - 1) : ((cur + delta) % size + size) % size;
+            nextPos = order[nxt];
+        } else {
+            int nxt = ((pos + delta) % size + size) % size;
+            nextPos = (scope == null) ? nxt : scope[nxt];
+        }
+        MusicTrack from = currentTrack();
+        current = nextPos;
         Core.settings.put(CFG_LAST, current);
         beginPlayback(current);
+        MusicTrack to = currentTrack();
+        if (from != to) {
+            Log.info("Track transition: " + (from == null ? "?" : from.name) + " -\u003e " + (to == null ? "?" : to.name));
+        }
         return playing;
+    }
+
+    /** 随机播放顺序（当前作用域内索引）；dirty 或尺寸不符时重建（打乱）。返回数组便于遍历 */
+    private static int[] ensureShuffleOrder() {
+        int[] scope = currentScope();
+        int size = (scope == null) ? tracks.size : scope.length;
+        if (shuffleDirty || shuffleOrder.size != size) {
+            java.util.ArrayList<Integer> tmp = new java.util.ArrayList<>();
+            for (int i = 0; i < size; i++) tmp.add(scope == null ? i : scope[i]);
+            java.util.Collections.shuffle(tmp);
+            shuffleOrder.clear();
+            shuffleOrder.addAll(tmp);
+            shuffleDirty = false;
+        }
+        int[] out = new int[shuffleOrder.size];
+        for (int i = 0; i < out.length; i++) out[i] = shuffleOrder.get(i);
+        return out;
     }
 
     /** 各声源按播放者当前位置刷新音量（距离衰减），并清理已自然播完的远程声源 */
@@ -539,6 +599,7 @@ public class MusicPlayer {
                 type == MusicTrack.URL ? "musicplayer.type.url" : "musicplayer.type.local");
         tracks.add(t);
         saveTracks();
+        shuffleDirty = true; // 曲目库变化 → 随机播放顺序需重建
         return t;
     }
 
@@ -562,6 +623,7 @@ public class MusicPlayer {
         // 同步清理专辑中对该曲目的引用，避免孤悬 hash
         for (Album a : albums) a.hashes.remove(hash);
         saveAlbums();
+        shuffleDirty = true; // 曲目库变化 → 随机播放顺序需重建
     }
 
     // ------------------------------------------------------------------
@@ -594,6 +656,13 @@ public class MusicPlayer {
 
     private static void beginPlayback(int index) {
         MusicTrack t = tracks.get(index);
+        // flac/m4a/wma/aac/opus 等 Soloud 无内置解码器：直接创建声源会原生崩溃 → 阻止并在日志说明（仅排除本机解码，仍可分享字节给他人）
+        if (t != null && (t.isUrl() || t.isLocal()) && !isDecodablePath(t.source)) {
+            Log.warn("Blocked play of undecodable " + t.name + " (Soloud only decodes ogg/mp3/wav)");
+            playing = false;
+            localVoiceId = -1;
+            return;
+        }
         Fi file = resolveToPlayableFile(t);
         if (file == null || !file.exists()) {
             if (t != null && t.isUrl()) {
@@ -629,6 +698,7 @@ public class MusicPlayer {
             Core.audio.setLooping(id, loopMode == LOOP_ONE);
             localVoiceId = id;
             playing = true;
+            voiceEverPlayed = false; // 新声源尚未确认进入播放态前不推进
             lastBlip = Time.time;
             lastPos = 0f; // 新播放从 0 起算，避免上一首的残留位置触发 A-B 回绕误判
             unregisterLocalVoice();
@@ -704,6 +774,7 @@ public class MusicPlayer {
 
     public static void stopLocal() {
         pendingResumeSeek = -1f;
+        voiceEverPlayed = false;
         if (localVoiceId >= 0) {
             Core.audio.stop(localVoiceId);
             localVoiceId = -1;
@@ -745,9 +816,9 @@ public class MusicPlayer {
         return speed;
     }
 
-    /** 设置倍速（0.1–16x）；与音高叠加，实际速率 = pitch * speed */
+    /** 设置倍速（1/16–16x）；与音高叠加，实际速率 = pitch * speed */
     public static void setSpeed(float s) {
-        speed = clamp(s, 0.1f, 16f);
+        speed = clamp(s, MIN_SPEED, 16f);
         Core.settings.put(CFG_SPEED, speed);
         applyRate();
     }
@@ -863,6 +934,8 @@ public class MusicPlayer {
         if (f == null || !f.exists()) return -1f;
         String key = f.absolutePath();
         if (!isAsciiPath(key)) return -1f; // 非 ASCII 路径不读（防 Soloud 内部锁崩溃），由 ASCII 缓存补齐
+        if (!isDecodablePath(key)) return -1f; // flac/m4a/wma/aac/opus 无 Soloud 解码器，探测会原生失败 → 跳过
+        if (f.length() > LENGTH_PROBE_SIZE_LIMIT) return -1f; // 超大文件解码耗时/占内存，仅显示大小
         Float cached = lengthCache.get(key);
         if (cached != null) return cached;
         float len = -1f;
@@ -877,6 +950,12 @@ public class MusicPlayer {
         }
         lengthCache.put(key, len);
         return len;
+    }
+
+    /** 路径扩展名是否可由 Soloud 内置解码器解码（ogg/mp3/wav） */
+    private static boolean isDecodablePath(String path) {
+        if (path == null) return false;
+        return DECODABLE_EXT.matcher(path).find();
     }
 
     /** 路径是否全为 ASCII（可安全交给 Soloud 原生 fopen） */
@@ -939,6 +1018,11 @@ public class MusicPlayer {
         loopMode = mode;
         Core.settings.put(CFG_LOOP, loopMode);
         if (localVoiceId >= 0) Core.audio.setLooping(localVoiceId, loopMode == LOOP_ONE);
+        if (loopMode == LOOP_SHUFFLE) {
+            shuffleDirty = true; // 进入随机模式时重建顺序（含当前曲目首次进入的起点）
+        } else {
+            shuffleOrder.clear();
+        }
     }
 
     public static int loopMode() {
@@ -946,7 +1030,7 @@ public class MusicPlayer {
     }
 
     public static void cycleLoopMode() {
-        setLoopMode((loopMode + 1) % 3);
+        setLoopMode((loopMode + 1) % 5);
     }
 
     public static void next() {
@@ -1231,6 +1315,10 @@ public class MusicPlayer {
         try {
             if (!isAsciiPath(file.absolutePath())) {
                 SiliconLog.log("Block remote play of non-ASCII path: " + file.name());
+                return;
+            }
+            if (!isDecodablePath(file.absolutePath())) {
+                SiliconLog.log("Block remote play of undecodable " + file.name());
                 return;
             }
             snd = Sound.createStream(file);
