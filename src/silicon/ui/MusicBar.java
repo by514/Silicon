@@ -119,11 +119,11 @@ public class MusicBar {
 
             iconBtn(bar, Icon.rightOpen, MusicPlayer::next).pad(1f);
 
-            // 倍速快捷循环按钮（对数 0.1–16x 常用档）：0.5 / 1 / 1.5 / 2 / 4
+            // 倍速快捷循环按钮（对数 0.1–16x 常用档）：0.5 / 1 / 1.5 / 2 / 4；固定宽度完整显示（不省略）
             final float[] speeds = {0.5f, 1f, 1.5f, 2f, 4f};
             TextButton speedBtn = new TextButton(speedLabel(), Styles.flatBordert);
             speedBtn.getLabel().setWrap(false);
-            speedBtn.getLabel().setEllipsis(true);
+            speedBtn.getLabel().setEllipsis(false);
             speedBtn.getLabel().setFontScale(Scl.scl(0.9f));
             speedBtn.setColor(Pal.accent);
             final String[] lastSpeed = {speedLabel()};
@@ -138,7 +138,7 @@ public class MusicBar {
                 MusicPlayer.setSpeed(next);
                 speedBtn.setText(speedLabel());
             });
-            bar.add(speedBtn).width(Scl.scl(64f)).pad(1f);
+            bar.add(speedBtn).width(Scl.scl(76f)).pad(1f);
 
             // 专辑作用域切换按钮：点按在「全部曲目」与各专辑间轮换；长按/双击由设置页管理
             TextButton albumBtn = new TextButton(albumScopeLabel(), Styles.flatBordert);
@@ -158,11 +158,12 @@ public class MusicBar {
             });
             bar.add(albumBtn).width(Scl.scl(112f)).pad(1f);
 
-            // 循环模式快捷按钮：点击在 6 种模式间循环；宽度自适应文字（不再固定小格导致长文案挤压/换行）
+            // 循环模式快捷按钮：点击在 6 种模式间循环。固定宽度（不等长文本切换不导致按钮忽大忽小/点小/换行），
+            // 文案已改为等长的两字中文（关闭/列表/单曲/乱序/单停/随机），配合字号在固定格内完整显示不省略
             TextButton loopBtn = new TextButton(loopModeLabel(), Styles.flatBordert);
             loopBtn.getLabel().setWrap(false);
-            loopBtn.getLabel().setEllipsis(true);
-            loopBtn.getLabel().setFontScale(Scl.scl(0.85f));
+            loopBtn.getLabel().setEllipsis(false);
+            loopBtn.getLabel().setFontScale(Scl.scl(0.9f));
             loopBtn.setColor(Pal.accent);
             final String[] lastLoop = {loopModeLabel()};
             loopBtn.update(() -> {
@@ -174,7 +175,7 @@ public class MusicBar {
                 lastLoop[0] = loopModeLabel();
                 loopBtn.setText(lastLoop[0]);
             });
-            bar.add(loopBtn).pad(1f);
+            bar.add(loopBtn).width(Scl.scl(64f)).pad(1f);
 
             // 设置按钮：打开音乐播放器设置页
             iconBtn(bar, Icon.settings, MusicPlayerDialog::open).pad(1f);
@@ -183,18 +184,19 @@ public class MusicBar {
             iconBtn(bar, Icon.down, () -> { collapsed = true; detach(); }).pad(1f);
 
             bar.row();
-            // 曲名（可点开设置页）：滚动循环显示 + 上限宽（占满整行剩余空间），杜绝长曲名撑宽悬浮条
+            // 曲名（可点开设置页）：滚动循环显示 + 固定宽度（colspan 铺满整条固定宽度）→ 长名在条内滚动裁剪、不超出
             MarqueeLabel track = new MarqueeLabel(trackLabel(), Styles.outlineLabel);
             track.setColor(Color.white);
-            track.maxPref = Scl.scl(530f);
+            track.maxPref = Scl.scl(900f);
             track.clicked(() -> MusicPlayerDialog.open());
             final String[] lastTrack = {trackLabel()};
             track.update(() -> {
                 String lbl = trackLabel();
                 if (!lastTrack[0].equals(lbl)) { lastTrack[0] = lbl; track.setText(lbl); }
             });
-            // 曲名列 growX 用满整行宽度（宽度由 maxPref 上限保证），文本超上限才滚动
-            bar.add(track).growX().pad(2f, 6f, 2f, 6f).colspan(11).left();
+            // 曲名列 growX 铺满整条固定宽度；MarqueeLabel 的 this.width 即固定条宽，
+            // 文本超过固定宽才触发滚动剪裁（短名不滚、长名循环显示，不再从条右沿漏出）
+            bar.add(track).growX().pad(2f, 6f, 2f, 6f).colspan(11).left().height(Scl.scl(26f));
 
             bar.row();
             // 进度条（独立一行，加高并上下留白，避免滑杆圆钮越界遮挡上方曲名/按钮文字）
@@ -203,8 +205,14 @@ public class MusicBar {
         }
 
         bar.pack();
-        // 收起态固定窄宽；展开态保持 pack 出的自适应宽度（紧凑图标排，避免整条过长）
-        if (collapsed) bar.setSize(Scl.scl(44f), bar.getPrefHeight());
+        if (collapsed) {
+            // 收起态固定窄宽
+            bar.setSize(Scl.scl(44f), bar.getPrefHeight());
+        } else {
+            // 展开态固定整条宽度：曲名/进度行以 colspan 铺满，长曲名在此固定宽内滚动裁剪，
+            // 不再随内容 pack 伸缩导致「歌名过长不循环而直接超出条右沿」
+            bar.setSize(Scl.scl(600f), bar.getPrefHeight());
+        }
 
         // 位置：优先记忆拖拽位置；首次使用则取默认右下角
         float x = Core.settings.has(CFG_X) ? Core.settings.getFloat(CFG_X) : Core.graphics.getWidth() - bar.getWidth() - Scl.scl(10f);

@@ -286,13 +286,14 @@ public class MusicPlayerDialog extends BaseDialog {
         cont.table(bottom -> {
             TextButton loop = new TextButton(loopModeText(), Styles.flatBordert);
             loop.getLabel().setWrap(false);
-            loop.getLabel().setEllipsis(true);
+            loop.getLabel().setEllipsis(false);
             loop.getLabel().setFontScale(Scl.scl(0.9f));
             loop.clicked(() -> {
                 MusicPlayer.cycleLoopMode();
                 loop.setText(loopModeText());
             });
-            bottom.add(loop).pad(2f);
+            // 固定宽度（不等长文本切换不导致按钮忽大忽小）；文案等长中文，完整显示不省略
+            bottom.add(loop).width(Scl.scl(84f)).pad(2f);
 
             TextButton rev = new TextButton(Core.bundle.get("musicplayer.reverse"), Styles.flatBordert);
             rev.getLabel().setWrap(false);
@@ -702,7 +703,10 @@ public class MusicPlayerDialog extends BaseDialog {
     }
 
     private static String volumeText(float volume) {
-        return Math.round(Math.max(0f, cursorToVolume(volumeToCursor(volume))) * 100) + "%";
+        // 对数（dB）显示：等长滑杆位移对应等幅 dB 步进，直观体现响度的对数增长。
+        // 0.001→-60dB、0.1→-20dB、1→0dB（100% 参考）、10→+20dB。
+        float db = 20f * (float) Math.log10(Math.max(0.001f, volume));
+        return (db > 0 ? "+" : "") + Math.round(db) + "dB";
     }
 
     // 音高对数映射（0.1–10x）：音高 = 0.1 * 100^cursor

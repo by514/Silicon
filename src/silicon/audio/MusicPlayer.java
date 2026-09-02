@@ -138,6 +138,14 @@ public class MusicPlayer {
     /** 待应用的恢复进度（秒）；<0 表示无。resume 后不立即 idSeek（新流式声源可能未就绪，实测即时 seek 会原生崩溃），
      *  推迟到声源确认存活（isPlaying 且在 beginPlayback 后经过 0.3s）再应用 */
     private static float pendingResumeSeek = -1f;
+    /** 恢复播放（pause→resume）给慢速加载的流式/外部声源延长的确认窗口截止时刻（秒）。
+     *  暂停前已确认播放过的曲目，恢复后给比全新选曲更长的加载期，避免其尚未回到播放态就被
+     *  「从未播放→停止」守卫误杀；窗口过期仍未恢复则停（不自动跳到内置/其它曲）。 */
+    private static float resumeGraceUntil = -1f;
+    /** 恢复播放的额外加载确认窗口时长（秒）：URL/流式外部声源回到播放态可能超过 0.5s 的常规 ADVANCE_DELAY */
+    private static final float RESUME_GRACE = 3f;
+    /** 暂停发生前是否确实在播放（记录给 resume 决定是否延长加载确认窗口） */
+    private static boolean wasPlayingBeforePause = false;
 
     /** 当前本机声源是否曾确认进入播放态（用于区分「自然播完可推进」与「新声源启动即失败」：
      *  后者不得静默跳到别的曲目（曾因误判把本地曲跳成内置曲），应停播并留日志 */
@@ -464,11 +472,13 @@ public class MusicPlayer {
         if (autoAdvancing) return; // 上一条刚触发推进，等新声源就绪，避免重复推进/跳曲
         if (Time.time - lastSeekAt < 1.0f) return; // seek 后声源可能瞬时未就绪，误判已播完会跳歌
         if (Time.time - lastBlip < ADVANCE_DELAY) return; // 新声源流式加载未就绪的静默窗口
+        if (resumeGraceUntil > Time.time) return; // 恢复播放（pause→resume）的延长加载确认窗口：慢速 URL/流式外部声源
         if (!voiceEverPlayed) {
             // 静默窗口过后仍从未进入播放态 → 启动即失败（解码不支持/缓存损坏/文件缺失）。
             // 不自动跳到别的曲目（此前会静默推进成「内置歌曲」），停播并留日志便于排查。
             MusicTrack cur = currentTrack();
             Log.warn("Playback failed to start, stopped without auto-skip: " + (cur == null ? "?" : cur.name));
+            resumeGraceUntil = -1f;
             stopLocal();
             return;
         }
@@ -716,6 +726,8 @@ public class MusicPlayer {
         pausedPosition = 0f;
         clearAb();
         stopLocal();
+        wasPlayingBeforePause = false;
+        resumeGraceUntil = -1f;
         current = index;
         Core.settings.put(CFG_LAST, current);
         beginPlayback(current);
@@ -816,6 +828,8 @@ public class MusicPlayer {
 
     public static void pause() {
         if (!playing) return;
+        // 记录「暂停前确实在播放」，供 resume 延长慢速外部声源的加载确认窗口
+        wasPlayingBeforePause = true;
         if (localVoiceId >= 0) pausedPosition = currentTime();
         // 流式声源的 setPaused 并不总能真的静音（音乐仍会继续），故暂停实现为：
         // 真正 stop 本地声源保证不再出声，并记录进度，供恢复时 seek 回原位。
@@ -829,6 +843,10 @@ public class MusicPlayer {
         if (current >= 0) {
             float seekTo = pausedPosition;
             pausedPosition = 0f;
+            // 暂停前曲目已在播放（暂停经由 pause() 记录过进度）→ 恢复给更长的加载确认窗口，
+            // 防止慢速的 URL/流式外部声源尚未回到播放态就被「从未播放→停止」守卫误杀（表现为
+            // 「外部暂停再播放立即停止/跳走」）。窗口过期仍未恢复则停（不自动跳内置/其它曲）。
+            if (wasPlayingBeforePause) resumeGraceUntil = Time.time + RESUME_GRACE;
             beginPlayback(current);
             if (playing && seekTo > 0.05f) {
                 // 恢复播放通常要 seek 到暂停位置，但刚创建的新流式声源可能尚未就绪；
@@ -836,6 +854,7 @@ public class MusicPlayer {
                 // 推迟到声源确认存活后应用（tickLocal 内 pendingResumeSeek 处理）。
                 deferSeek(seekTo);
             }
+            wasPlayingBeforePause = false;
             if (playing) bcast(seekTo > 0.05f ? "resume" : "play");
         }
     }
@@ -849,6 +868,7 @@ public class MusicPlayer {
 
     public static void stopLocal() {
         pendingResumeSeek = -1f;
+        resumeGraceUntil = -1f;
         voiceEverPlayed = false;
         if (localVoiceId >= 0) {
             Core.audio.stop(localVoiceId);
