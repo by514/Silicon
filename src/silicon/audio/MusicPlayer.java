@@ -103,6 +103,9 @@ public class MusicPlayer {
     private static boolean initialized = false;
     /** 上一帧游戏是否处于暂停（ESC）态的边沿记忆，用于在此版本无 pause 事件时轮询检测 */
     private static boolean prevGamePaused = false;
+    /** 待应用的恢复进度（秒）；<0 表示无。resume 后不立即 idSeek（新流式声源可能未就绪，实测即时 seek 会原生崩溃），
+     *  推迟到声源确认存活（isPlaying 且在 beginPlayback 后经过 0.3s）再应用 */
+    private static float pendingResumeSeek = -1f;
 
     /** 声源结束检测的静默阈值（秒）：自然播完后等待该时长再推进下一首，避免新声源流式加载未就绪时重复推进 */
     private static final float ADVANCE_DELAY = 0.5f;
@@ -354,6 +357,13 @@ public class MusicPlayer {
 
     private static void tickLocal() {
         if (!playing || localVoiceId < 0) return;
+        // 恢复播放的延迟 seek：新声源确认存活（isPlaying 且 beginPlayback 后已过 0.3s）才应用，
+        // 避开「刚建声源立刻 idSeek」的原生崩溃窗口（见 resume() 注释）
+        if (pendingResumeSeek >= 0f && Core.audio.isPlaying(localVoiceId) && Time.time - lastBlip >= 0.3f) {
+            float s = pendingResumeSeek;
+            pendingResumeSeek = -1f;
+            seek(s);
+        }
         // A-B 区间循环：进度到达 B 点（hi）后回转到 A 点（lo），实现区间重复
         if (hasAb()) {
             float pos = currentTime();
@@ -672,14 +682,18 @@ public class MusicPlayer {
             pausedPosition = 0f;
             beginPlayback(current);
             if (playing && seekTo > 0.05f) {
+                // 恢复播放通常要 seek 到暂停位置，但刚创建的新流式声源可能尚未就绪；
+                // 实测此时立刻 idSeek 会在原生 arc64.dll 崩溃（Soloud 内部锁断言，见 hs_err_pid*）。
+                // 推迟到声源确认存活后应用（tickLocal 内 pendingResumeSeek 处理）。
                 float len = trackLength();
-                seek(Math.min(seekTo, len > 0f ? Math.max(0f, len - 0.5f) : seekTo));
+                pendingResumeSeek = Math.min(seekTo, len > 0f ? Math.max(0f, len - 0.5f) : seekTo);
             }
             if (playing) bcast(seekTo > 0.05f ? "resume" : "play");
         }
     }
 
     public static void stopLocal() {
+        pendingResumeSeek = -1f;
         if (localVoiceId >= 0) {
             Core.audio.stop(localVoiceId);
             localVoiceId = -1;
