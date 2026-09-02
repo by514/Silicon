@@ -327,12 +327,17 @@ public class MusicPlayerDialog extends BaseDialog {
         return (total / 60) + ":" + (total % 60 < 10 ? "0" : "") + (total % 60);
     }
 
-    /** A-B 区间状态文字：未设置显示「未设置」；已设置显示 lo–hi 区间与开关态 */
+    /** A-B 区间状态文字：未设置显示「未设置」；两点已设但间距未达 hasAb 阈值时显示「过短未生效」；正常显示区间与开关态 */
     private static String abStatusText() {
-        if (!MusicPlayer.hasAb()) return Core.bundle.get("musicplayer.abUnset");
-        float lo = Math.min(MusicPlayer.abA(), MusicPlayer.abB());
-        float hi = Math.max(MusicPlayer.abA(), MusicPlayer.abB());
-        return Core.bundle.get("musicplayer.abOn") + "  " + fmt(lo) + " - " + fmt(hi);
+        if (MusicPlayer.hasAb()) {
+            float lo = Math.min(MusicPlayer.abA(), MusicPlayer.abB());
+            float hi = Math.max(MusicPlayer.abA(), MusicPlayer.abB());
+            return Core.bundle.get("musicplayer.abOn") + "  " + fmt(lo) + " - " + fmt(hi);
+        }
+        if (MusicPlayer.abA() >= 0f && MusicPlayer.abB() >= 0f) {
+            return Core.bundle.get("musicplayer.abTooShort");
+        }
+        return Core.bundle.get("musicplayer.abUnset");
     }
 
     // 倍速对数映射（0.1–16x）：speed = 0.1 * 160^cursor，160 = 16/0.1

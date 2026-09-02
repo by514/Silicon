@@ -98,6 +98,8 @@ public class MusicPlayer {
     private static boolean autoAdvancing = false;
     /** 最近一次 seek 的游戏内时间（秒）；seek 后给 Soloud 一段恢复期，防止流式声源跳转瞬间被误判为「已播完」而跳歌 */
     private static float lastSeekAt = -1000f;
+    /** 上一帧本地位置（秒），用于识别 LOOP_ONE 原生循环在曲末回绕到 0 的进度回退（区分于手动拖动 seek） */
+    private static float lastPos = 0f;
     private static boolean initialized = false;
 
     /** 声源结束检测的静默阈值（秒）：自然播完后等待该时长再推进下一首，避免新声源流式加载未就绪时重复推进 */
@@ -347,10 +349,16 @@ public class MusicPlayer {
         // A-B 区间循环：进度到达 B 点（hi）后回转到 A 点（lo），实现区间重复
         if (hasAb()) {
             float pos = currentTime();
+            float lo = Math.min(abA, abB);
             float hi = Math.max(abA, abB);
             if (pos >= hi) {
-                seek(Math.min(abA, abB));
+                seek(lo);
+            } else if (Time.time - lastSeekAt >= 1.0f && lastPos - pos > 0.5f) {
+                // LOOP_ONE 原生循环在曲末无痕回绕到 0：位置相对上帧明显回退，且非手动拖动后刚发生，
+                // 说明整曲被原生层重启，把播放无缝拉回区间起点，避免每圈先播一段 [0,lo) 再进区间
+                seek(lo);
             }
+            lastPos = currentTime();
         }
         // 仍在播放（含暂停态，暂停时 Soloud 的 id 仍有效）→ 复位推进守卫
         if (Core.audio.isPlaying(localVoiceId)) {
@@ -600,6 +608,7 @@ public class MusicPlayer {
             localVoiceId = id;
             playing = true;
             lastBlip = Time.time;
+            lastPos = 0f; // 新播放从 0 起算，避免上一首的残留位置触发 A-B 回绕误判
             unregisterLocalVoice();
             Voice v = new Voice();
             v.hash = t.cacheHash;
