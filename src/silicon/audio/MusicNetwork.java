@@ -57,8 +57,11 @@ public class MusicNetwork {
     private static float lastPosTick = 0;
     private static boolean initialized = false;
 
-    /** 本地路径曲目分块发送缓冲（帧速分片，避免一次灌爆可靠包队列） */
-    private static byte[] pendingBytes;
+    /** 本地路径曲目分块发送状态：流式读盘（复用单块缓冲，不整文件读入内存），帧速分片，避免一次灌爆可靠包队列 */
+    private static Fi pendingFi;
+    private static java.io.InputStream pendingStream;
+    private static final byte[] chunkBuf = new byte[CHUNK_SIZE];
+    private static long pendingTotal;
     private static String pendingHash;
     private static int pendingIdx;
     private static int pendingChunks;
@@ -227,8 +230,9 @@ public class MusicNetwork {
             return;
         }
         try {
-            byte[] all = file.readBytes();
-            int chunkCount = (all.length + CHUNK_SIZE - 1) / CHUNK_SIZE;
+            closePending(); // 上一轮发送未完时先关掉旧流，避免文件描述符泄漏
+            long total = file.length();
+            int chunkCount = (int) ((total + CHUNK_SIZE - 1) / CHUNK_SIZE);
             String hash = t.cacheHash;
 
             // 先广播元数据
@@ -237,48 +241,75 @@ public class MusicNetwork {
                 .append("\",\"hash\":\"").append(hash)
                 .append("\",\"name\":\"").append(escape(t.name))
                 .append("\",\"type\":2")
-                .append(",\"total\":").append(all.length)
+                .append(",\"total\":").append(total)
                 .append(",\"chunks\":").append(chunkCount)
                 .append(",\"ext\":\"").append(MusicPlayer.extensionFrom(t.source).replace(".", ""))
                 .append('}');
             sendReliable(MSG_META, meta.toString());
 
-            // 分块加入发送缓冲，由 tick() 每帧限量发出，避免一次灌爆可靠包队列
-            pendingBytes = all;
+            // 流式分块（每次只读一块进复用缓冲），由 tick() 每帧限量发出，避免大文件整读内存与包队列暴涨
+            pendingFi = file;
+            pendingTotal = total;
             pendingHash = hash;
             pendingIdx = 0;
             pendingChunks = chunkCount;
             flushPendingChunks();
-            Log.info("[SiliconMusic] broadcast local file " + t.name + " (" + all.length + "B, " + chunkCount + " chunks)");
+            Log.info("[SiliconMusic] broadcast local file " + t.name + " (" + total + "B, " + chunkCount + " chunks)");
         } catch (Exception e) {
             Log.info("[SiliconMusic] local file read fail: " + e.getMessage());
         }
     }
 
-    /** 每帧发出一批待发送分块，直到一次性发完 */
+    /** 每帧发出一批待发送分块，直到一次性发完；分块从磁盘按块读取，不整载入内存 */
     private static void flushPendingChunks() {
-        if (pendingBytes == null || pendingHash == null) return;
-        int sent = 0;
-        while (pendingIdx < pendingChunks && sent < CHUNKS_PER_TICK) {
-            int off = pendingIdx * CHUNK_SIZE;
-            int len = Math.min(CHUNK_SIZE, pendingBytes.length - off);
-            byte[] header;
-            try {
-                header = buildHeader(pendingHash, pendingChunks, pendingIdx);
-            } catch (IOException e) {
-                break;
+        if (pendingFi == null || pendingHash == null) return;
+        try {
+            if (pendingStream == null) pendingStream = pendingFi.read();
+            int sent = 0;
+            while (pendingIdx < pendingChunks && sent < CHUNKS_PER_TICK) {
+                int off = (int) ((long) pendingIdx * CHUNK_SIZE);
+                int len = pendingIdx == pendingChunks - 1 ? (int) (pendingTotal - (long) pendingIdx * CHUNK_SIZE) : CHUNK_SIZE;
+                int got = 0;
+                while (got < len) {
+                    int n = pendingStream.read(chunkBuf, got, len - got);
+                    if (n < 0) break;
+                    got += n;
+                }
+                byte[] header;
+                try {
+                    header = buildHeader(pendingHash, pendingChunks, pendingIdx);
+                } catch (IOException e) {
+                    break;
+                }
+                byte[] payload = new byte[HEADER_LEN + got];
+                System.arraycopy(header, 0, payload, 0, HEADER_LEN);
+                System.arraycopy(chunkBuf, 0, payload, HEADER_LEN, got);
+                broadcastBinary(MSG_CHUNK, payload);
+                pendingIdx++;
+                sent++;
             }
-            byte[] payload = new byte[HEADER_LEN + len];
-            System.arraycopy(header, 0, payload, 0, HEADER_LEN);
-            System.arraycopy(pendingBytes, off, payload, HEADER_LEN, len);
-            broadcastBinary(MSG_CHUNK, payload);
-            pendingIdx++;
-            sent++;
+            if (pendingIdx >= pendingChunks) {
+                closePending();
+            }
+        } catch (IOException e) {
+            Log.info("[SiliconMusic] chunk read fail: " + e.getMessage());
         }
-        if (pendingIdx >= pendingChunks) {
-            pendingBytes = null;
-            pendingHash = null;
+    }
+
+    /** 关闭并复位分块发送状态（发送完成或世界重置时调用） */
+    private static void closePending() {
+        if (pendingStream != null) {
+            try {
+                pendingStream.close();
+            } catch (IOException ignored) {
+            }
+            pendingStream = null;
         }
+        pendingFi = null;
+        pendingHash = null;
+        pendingTotal = 0;
+        pendingIdx = 0;
+        pendingChunks = 0;
     }
 
     private static byte[] buildHeader(String hash, int chunkCount, int idx) throws IOException {
@@ -616,10 +647,7 @@ public class MusicNetwork {
         recv.clear();
         ownerHash.clear();
         ownerPos.clear();
-        pendingBytes = null;
-        pendingHash = null;
-        pendingIdx = 0;
-        pendingChunks = 0;
+        closePending();
         MusicPlayer.clearRemoteVoices();
         MusicPlayer.cleanupStagingFiles();
         // 本机仍在播放时，切换地图后重广播当前曲目，避免新地图玩家失去该声源
