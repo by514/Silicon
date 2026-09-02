@@ -101,6 +101,8 @@ public class MusicPlayer {
     /** 上一帧本地位置（秒），用于识别 LOOP_ONE 原生循环在曲末回绕到 0 的进度回退（区分于手动拖动 seek） */
     private static float lastPos = 0f;
     private static boolean initialized = false;
+    /** 上一帧游戏是否处于暂停（ESC）态的边沿记忆，用于在此版本无 pause 事件时轮询检测 */
+    private static boolean prevGamePaused = false;
 
     /** 声源结束检测的静默阈值（秒）：自然播完后等待该时长再推进下一首，避免新声源流式加载未就绪时重复推进 */
     private static final float ADVANCE_DELAY = 0.5f;
@@ -331,11 +333,17 @@ public class MusicPlayer {
     private static void update() {
         if (!initialized || !enabled) return;
         if (player == null) return;
-        // 游戏从暂停恢复后：若曾因游戏暂停冻结进度（暂停期间被静音但流式源虚进），seek 回冻结点，取消冻结标记
-        if (pausedByGame && !isGamePaused()) {
+        // 游戏暂停（ESC）边沿检测：进入时冻结进度，恢复时 seek 回冻结点。
+        // 此前 pausedByGame 从未被置 true（死代码）→ 暂停期间进度条虚进，从未真正对齐。
+        boolean gp = isGamePaused();
+        if (gp && !prevGamePaused) {
+            pausedByGame = true;
+            if (localVoiceId >= 0) pausedPosition = currentTime();
+        } else if (!gp && prevGamePaused) {
             pausedByGame = false;
             if (localVoiceId >= 0 && pausedPosition > 0f) seek(pausedPosition);
         }
+        prevGamePaused = gp;
         tickLocal();
         refreshVolumes();
     }
