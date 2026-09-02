@@ -5,7 +5,6 @@ import arc.graphics.Color;
 import arc.graphics.g2d.Draw;
 import arc.graphics.g2d.Lines;
 import arc.math.Mathf;
-import arc.struct.Seq;
 import arc.util.Interval;
 import arc.util.Strings;
 import arc.util.Time;
@@ -20,7 +19,6 @@ import mindustry.world.blocks.sandbox.PowerVoid;
 import mindustry.world.meta.Env;
 import mindustry.world.meta.Stat;
 
-import static mindustry.content.Blocks.powerVoid;
 import static silicon.Vars.powerChanged;
 import static silicon.Vars.powerStored;
 
@@ -43,7 +41,6 @@ public class RollGenerator extends PowerGenerator {
      */
     public float warmupSpeed = 0.1f;
 
-    private static final Seq<Building> emptySeq = new Seq<>(0);
 
 
     /**
@@ -117,13 +114,15 @@ public class RollGenerator extends PowerGenerator {
         @Override
         public void updateTile() {
             if (!enabled) return;
+            // #39 性能优化：原先每 tick 遍历全队同类建筑、再对每个做 power.graph.all 线性查找
+            // （O(k×m)），改为遍历本建筑所在电网一次统计（O(m)）。
             int i = 0;
-            for (Building b : team.data().buildingTypes.get(block, emptySeq)) {
-                if (b.block instanceof RollGenerator && power.graph.all.contains(b)) i++;
+            boolean hasPowerVoid = false;
+            for (Building b : power.graph.all) {
+                if (b.block instanceof RollGenerator) i++;
+                else if (b.block instanceof PowerVoid) hasPowerVoid = true;
             }
-            for (Building b : team.data().buildingTypes.get(powerVoid, emptySeq)) {
-                if (b.block instanceof PowerVoid && power.graph.all.contains(b)) return;
-            }
+            if (hasPowerVoid) return;
             if (Float.isNaN(currentPowerProduction)) {
                 lastCurrentPowerProduction = 0f;
             } else {

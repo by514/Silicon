@@ -9,7 +9,6 @@ import arc.math.geom.Geometry;
 import arc.scene.ui.layout.Table;
 import arc.util.Eachable;
 import arc.util.Nullable;
-import arc.util.Time;
 import arc.util.io.Reads;
 import arc.util.io.Writes;
 import mindustry.Vars;
@@ -17,7 +16,6 @@ import mindustry.entities.units.BuildPlan;
 import mindustry.gen.Building;
 import mindustry.gen.Unit;
 import mindustry.graphics.Drawf;
-import mindustry.ui.Styles;
 import mindustry.world.Block;
 import mindustry.world.Tile;
 import mindustry.world.meta.BlockGroup;
@@ -39,7 +37,9 @@ public class Switch extends Block {
             Building front = building.front();
             // #28 只允许控制同队建筑
             if (front == null || front.team != building.team) return;
-            front.enabled = !enabled;
+            // #43 单次状态更新（不持续覆盖），并按该次设置刷新 switch 记忆状态
+            front.enabled = enabled;
+            if (building instanceof SwitchBuild sb) sb.fE = enabled;
         });
         state = new TextureRegion[2];
     }
@@ -98,14 +98,20 @@ public class Switch extends Block {
         @Override
         public void updateTile() {
             super.updateTile();
-            // #28 同队校验：不控制其它队伍建筑
-            if (front() != null && front().team == team && front().enabled != fE) front().enabled = fE;
+            // #43 同步：前方建筑被外部（逻辑处理器等）修改时，跟随其实际状态
+            Building f = front();
+            if (f != null && f.team == team) {
+                if (f.enabled != fE) fE = f.enabled;
+            }
         }
 
         @Override
         public void tapped() {
-            // #28 同队校验
-            if (front() != null && front().team == team && !(front() instanceof SwitchBuild)) fE = !fE;
+            // #28 同队校验：单次切换，不持续覆盖外部逻辑
+            if (front() != null && front().team == team && !(front() instanceof SwitchBuild)) {
+                fE = !fE;
+                configure(fE);
+            }
         }
 
 //        /**
