@@ -39,6 +39,13 @@ public class MusicPlayerDialog extends BaseDialog {
         instance.rebuild();
     }
 
+    /** 下载完成/分块收齐后刷新曲目信息（时长/大小）显示：弹窗开着则重建曲目行，无需重开弹窗 */
+    public static void refreshIfOpen() {
+        if (instance != null && instance.isShown() && instance.getScene() == Core.scene) {
+            instance.rebuildRows();
+        }
+    }
+
     private MusicPlayerDialog() {
         super(Core.bundle.get("musicplayer.title"));
         closeOnBack();

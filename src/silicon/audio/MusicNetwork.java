@@ -437,8 +437,12 @@ public class MusicNetwork {
             Core.app.post(() -> {
                 boolean ok = MusicPlayer.writeCacheBytes(hash, bytes);
                 arc.struct.Seq<Runnable> done = pendingDownloads.remove(hash);
-                if (ok && done != null) {
-                    for (Runnable r : done) r.run();
+                if (ok) {
+                    if (done != null) {
+                        for (Runnable r : done) r.run();
+                    }
+                    // 弹窗开着则刷新曲目行（时长/大小立即落位，无需重开弹窗）
+                    silicon.ui.MusicPlayerDialog.refreshIfOpen();
                 }
             });
         }, err -> {
@@ -512,6 +516,8 @@ public class MusicNetwork {
                 // 收齐 → 把暂存文件 moveTo 转正式缓存，再尝试按 owner 播放
                 recvRemoveByHash(hash);
                 MusicPlayer.finalizeCache(hash, r.ext);
+                // 弹窗开着则刷新曲目行（本地文件共享收齐后时长/大小立即落位）
+                silicon.ui.MusicPlayerDialog.refreshIfOpen();
                 String owner = ownerOfHash(hash);
                 if (owner != null && !isSelf(owner)) {
                     playRemoteIfStillCurrent(owner, hash);
