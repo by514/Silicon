@@ -681,7 +681,7 @@ public class MusicPlayer {
     public static void setVolume(float v) {
         volume = clamp(v, 0f, 1f);
         Core.settings.put(CFG_VOLUME, volume);
-        if (localVoiceId >= 0) Core.audio.setVolume(localVoiceId, volume);
+        // 统一交给 refreshVolumes 按本地/远程口径应用（含 pan），避免重复 native 调用
         refreshVolumes();
     }
 
