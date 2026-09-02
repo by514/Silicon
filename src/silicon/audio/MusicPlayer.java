@@ -1106,7 +1106,18 @@ public class MusicPlayer {
         if (len > 0f) seconds = Math.min(seconds, Math.max(0f, len - 0.5f));
         pausedPosition = seconds;
         lastSeekAt = Time.time;
-        if (localVoiceId >= 0) SoloudBridge.seek(localVoiceId, seconds);
+        // 铁律：对「刚创建/未确认存活」的流式声源立刻 idSeek 会在原生 Soloud（arc64.dll）空指针崩溃
+        // （hs_err 栈 Soloud.idSeek + MusicPlayer.seek ← UI seek 滑杆 changed 回调，见 AGENTS「恢复播放对
+        //  刚创建的新声源立刻 idSeek 会原生进程崩溃」）。故只有声源确认存活（isPlaying 且距建源 ≥0.3s）
+        //  才同步 seek；否则走 deferSeek，由 tickLocal 在声源稳定后延迟应用——杜绝 UI 滑杆/自动推进等
+        //  任意路径对新声源同步 idSeek。
+        if (localVoiceId >= 0) {
+            if (Core.audio.isPlaying(localVoiceId) && Time.time - lastBlip >= 0.3f) {
+                SoloudBridge.seek(localVoiceId, seconds);
+            } else {
+                deferSeek(seconds);
+            }
+        }
     }
 
     public static void setLoopMode(int mode) {
