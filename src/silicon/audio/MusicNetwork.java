@@ -85,6 +85,7 @@ public class MusicNetwork {
             if (uuid == null || uuid.isEmpty()) return;
             ownerPos.remove(uuid);
             recv.remove(uuid);
+            ownerHash.remove(uuid); // 防离开玩家的在途下载/分块收齐后仍按旧挂账建立声源
             MusicPlayer.stopRemoteVoice(uuid);
         });
 
@@ -389,16 +390,19 @@ public class MusicNetwork {
             if (dup < 0) MusicPlayer.addTrack(MusicTrack.URL, url, name);
         }
         if (MusicPlayer.hasCache(hash)) {
-            float[] pos = ownerPos.get(owner);
-            MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
+            playRemoteIfStillCurrent(owner, hash);
             return;
         }
         MusicPlayer.registerHashExt(hash, MusicPlayer.extensionFrom(url));
         // 同一 URL 已在下载中时仅登记回调（去重，避免并发多次 Http）；下载完成统一触发各自回调
-        downloadHash(hash, url, () -> {
-            float[] pos = ownerPos.get(owner);
-            MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
-        });
+        downloadHash(hash, url, () -> playRemoteIfStillCurrent(owner, hash));
+    }
+
+    /** 回调里检查 owner 是否仍在播放该 hash：避免下载完成/分块收齐时，owner 已 stop/切曲却仍建立声源 */
+    private static void playRemoteIfStillCurrent(String owner, String hash) {
+        if (!hash.equals(ownerHash.get(owner))) return;
+        float[] pos = ownerPos.get(owner);
+        MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
     }
 
     /** 本机播放 URL 曲目但尚未下载缓存时，先从网络下载到本地缓存，完成后回调 onDone（主线程）。 */
@@ -510,8 +514,7 @@ public class MusicNetwork {
                 MusicPlayer.finalizeCache(hash, r.ext);
                 String owner = ownerOfHash(hash);
                 if (owner != null && !isSelf(owner)) {
-                    float[] pos = ownerPos.get(owner);
-                    MusicPlayer.playRemoteVoice(owner, hash, pos == null ? 0f : pos[0], pos == null ? 0f : pos[1]);
+                    playRemoteIfStillCurrent(owner, hash);
                 }
             }
         } catch (Exception e) {
