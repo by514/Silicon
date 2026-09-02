@@ -168,7 +168,7 @@ public class MusicBar {
             // 曲名（可点开设置页）：滚动循环显示 + 固定宽，杜绝长曲名撑宽悬浮条/长按钮
             MarqueeLabel track = new MarqueeLabel(trackLabel(), Styles.outlineLabel);
             track.setColor(Color.white);
-            track.tapped(() -> MusicPlayerDialog.open());
+            track.clicked(() -> MusicPlayerDialog.open());
             final String[] lastTrack = {trackLabel()};
             track.update(() -> {
                 String lbl = trackLabel();

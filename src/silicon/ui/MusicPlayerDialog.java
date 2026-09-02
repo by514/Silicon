@@ -402,7 +402,7 @@ public class MusicPlayerDialog extends BaseDialog {
             MusicBar.MarqueeLabel name = new MusicBar.MarqueeLabel(
                     (isCurrent ? "[accent]> " : "") + t.name, Styles.outlineLabel);
             name.setColor(isCurrent ? Pal.accent : Color.white);
-            name.tapped(() -> { MusicPlayer.play(idx); rebuild(); });
+            name.clicked(() -> { MusicPlayer.play(idx); rebuild(); });
             row.add(name).width(Scl.scl(240f)).height(Scl.scl(38f)).growX();
             // 类型标签独立固定宽列，右对齐 —— 与曲名分离，列宽稳定不致长名挤压
             row.add("[gray](" + Core.bundle.get(t.typeKey) + ")").
