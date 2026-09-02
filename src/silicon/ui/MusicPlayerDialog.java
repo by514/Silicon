@@ -82,9 +82,13 @@ public class MusicPlayerDialog extends BaseDialog {
                 nameLbl[0].setEllipsis(true);
                 info.add(nameLbl[0]).growX().width(Scl.scl(280f));
             }).growX();
-            // 每帧刷新状态与曲名（悬浮条/自动推进切换曲目时这里也跟着变）
+            // 每帧刷新状态与曲名（悬浮条/自动推进切换曲目时这里也跟着变）；仅内容变化时 setText 避免反复重排
+            final String[] lastNow = {""};
             now.update(() -> {
                 boolean playing = MusicPlayer.isPlaying();
+                String key = (playing ? "P" : "S") + "|" + nowPlayingLabel();
+                if (key.equals(lastNow[0])) return;
+                lastNow[0] = key;
                 disc[0].setDrawable(playing ? Icon.pause : Icon.play);
                 disc[0].setColor(playing ? Pal.accent : Color.lightGray);
                 stateLbl[0].setText(playing ? Core.bundle.get("musicplayer.playing") : Core.bundle.get("musicplayer.play"));
