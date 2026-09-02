@@ -31,7 +31,8 @@ import static mindustry.Vars.player;
  * 本机作为 owner 时，声源原点取玩家自身位置；多人远程声源见 {@link MusicNetwork}，可叠加多个。
  */
 public class MusicPlayer {
-    public static final int LOOP_OFF = 0, LOOP_LIST = 1, LOOP_ONE = 2, LOOP_SHUFFLE = 3, LOOP_ONE_STOP = 4;
+    /** 循环模式：0=关闭 1=列表循环 2=单曲循环 3=随机（假随机，队列打乱不重播）4=单曲播完即停 5=随机（真随机，每次独立抽签，可连播同曲） */
+    public static final int LOOP_OFF = 0, LOOP_LIST = 1, LOOP_ONE = 2, LOOP_SHUFFLE = 3, LOOP_ONE_STOP = 4, LOOP_RANDOM = 5;
 
     private static final String CFG_TRACKS = "musicplayer.tracks";
     private static final String CFG_VOLUME = "musicplayer.volume";
@@ -58,6 +59,22 @@ public class MusicPlayer {
     /** 倍速最小值（对数滑杆 1/16–16x） */
     public static final float MIN_SPEED = 1f / 16f;
     private static final String CACHE_DIR = "music/";
+
+    /**
+     * 歌曲缓存根目录：一律放在游戏数据目录下的 cache 子目录（绝对定位），
+     * 绝不用 Core.files.cache —— 后者 base 跟随进程 CWD，从 System32/C:\Windows 启动时
+     * 会解析为 C:\Windows\cache\music\（不可写）导致「缓存写失败、内置曲提取失败、任何歌曲都无法播放」。
+     */
+    private static Fi cacheRoot() {
+        Fi dir = Core.settings.getDataDirectory().child("cache").child(CACHE_DIR);
+        try { dir.mkdirs(); } catch (Exception ignored) { }
+        return dir;
+    }
+
+    /** 缓存目录下指定名称的文件（自动确保父目录存在） */
+    public static Fi cacheFile(String name) {
+        return cacheRoot().child(name);
+    }
     /** 声场衰减参考半径（格）：距离超过该值基本听不见 */
     static final float FALLOFF_RADIUS = 900f;
     /** Sound 3D 定位基础音量与衰减系数 */
@@ -428,6 +445,7 @@ public class MusicPlayer {
                 break;
             case LOOP_LIST:
             case LOOP_SHUFFLE:
+            case LOOP_RANDOM:
                 if (advanceSafely(1)) bcast("next");
                 break;
             default: // LOOP_OFF / LOOP_ONE_STOP：自然播完即停
@@ -453,7 +471,20 @@ public class MusicPlayer {
         clearAb();
         stopLocal();
         int nextPos;
-        if (loopMode == LOOP_SHUFFLE) {
+        if (loopMode == LOOP_RANDOM) {
+            // 真随机：每次独立抽签；作用域多于 1 首时避免与当前曲连续相同
+            if (size == 1) {
+                nextPos = (scope == null) ? 0 : scope[0];
+            } else {
+                int r = arc.math.Mathf.random(size - 1);
+                int pick = (scope == null) ? r : scope[r];
+                if (current >= 0 && pick == current) {
+                    r = (r + 1) % size;
+                    pick = (scope == null) ? r : scope[r];
+                }
+                nextPos = pick;
+            }
+        } else if (loopMode == LOOP_SHUFFLE) {
             int[] order = ensureShuffleOrder();
             size = order.length;
             if (size == 0) return false;
@@ -1030,7 +1061,7 @@ public class MusicPlayer {
     }
 
     public static void cycleLoopMode() {
-        setLoopMode((loopMode + 1) % 5);
+        setLoopMode((loopMode + 1) % 6);
     }
 
     public static void next() {
@@ -1121,7 +1152,7 @@ public class MusicPlayer {
             String name = jarFile.name();
             String ext = (name != null && name.contains("."))
                     ? name.substring(name.lastIndexOf('.')) : ".ogg";
-            Fi out = Core.files.cache(CACHE_DIR + "int-" + key + ext);
+            Fi out = cacheFile("int-" + key + ext);
             if (!out.exists()) {
                 byte[] data = jarFile.readBytes();
                 if (data == null || data.length == 0) return null;
@@ -1154,27 +1185,27 @@ public class MusicPlayer {
 
     public static boolean hasCache(String hash) {
         String ext = resolveExt(hash);
-        return ext != null && Core.files.cache(CACHE_DIR + hash + ext).exists();
+        return ext != null && cacheFile(hash + ext).exists();
     }
 
     public static boolean hasCache(String hash, String ext) {
         String e = normalizeExt(ext);
-        return Core.files.cache(CACHE_DIR + hash + e).exists();
+        return cacheFile(hash + e).exists();
     }
 
     public static Fi cacheFileForHash(String hash) {
         String ext = resolveExt(hash);
         if (ext == null) return null;
-        return Core.files.cache(CACHE_DIR + hash + ext);
+        return cacheFile(hash + ext);
     }
 
     public static Fi cacheFileForHash(String hash, String ext) {
-        return Core.files.cache(CACHE_DIR + hash + normalizeExt(ext));
+        return cacheFile(hash + normalizeExt(ext));
     }
 
     /** 分块接收暂存文件（未收齐前不视为正式缓存，防止半截文件被当作有效缓存） */
     public static Fi stagingFile(String hash) {
-        return Core.files.cache(CACHE_DIR + hash + ".part");
+        return cacheFile(hash + ".part");
     }
 
     /** 分块全部收齐后：把暂存文件重命名为正式缓存 `<hash>.<ext>` 并登记扩展名 */
@@ -1196,7 +1227,7 @@ public class MusicPlayer {
     /** 清理残留的未完成分块暂存文件（世界切换时无进行中的传输，避免孤儿 .part 长期堆积） */
     public static void cleanupStagingFiles() {
         try {
-            Fi dir = Core.files.cache(CACHE_DIR);
+            Fi dir = cacheRoot();
             if (dir != null && dir.isDirectory()) {
                 for (Fi f : dir.list()) {
                     if (f != null && "part".equalsIgnoreCase(f.extension())) f.delete();
@@ -1213,7 +1244,7 @@ public class MusicPlayer {
         if (known != null) return known;
         // 未登记：扫缓存目录找 <hash>.<任意ext>
         try {
-            Fi dir = Core.files.cache(CACHE_DIR);
+            Fi dir = cacheRoot();
             if (dir != null && dir.isDirectory()) {
                 for (Fi f : dir.list()) {
                     if (f != null && "part".equalsIgnoreCase(f.extension())) continue; // 跳过未完成的分块暂存文件

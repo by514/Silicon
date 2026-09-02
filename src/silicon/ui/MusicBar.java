@@ -5,7 +5,10 @@ import arc.Events;
 import arc.graphics.Color;
 import arc.graphics.g2d.Draw;
 import arc.graphics.g2d.Fill;
+import arc.graphics.g2d.ScissorStack;
 import arc.math.Mathf;
+import arc.math.geom.Rect;
+import arc.util.Align;
 import arc.scene.Element;
 import arc.scene.event.InputEvent;
 import arc.scene.event.InputListener;
@@ -162,19 +165,17 @@ public class MusicBar {
             iconBtn(bar, Icon.down, () -> { collapsed = true; detach(); }).pad(1f);
 
             bar.row();
-            // 曲名（可点开设置页）：单行 + 省略号，杜绝长名换行导致行高变化并挤压下方进度条
-            arc.scene.ui.Label track = new arc.scene.ui.Label(trackLabel(), Styles.outlineLabel);
+            // 曲名（可点开设置页）：滚动循环显示 + 固定宽，杜绝长曲名撑宽悬浮条/长按钮
+            MarqueeLabel track = new MarqueeLabel(trackLabel(), Styles.outlineLabel);
             track.setColor(Color.white);
-            track.setWrap(false);
-            track.setEllipsis(true);
             track.tapped(() -> MusicPlayerDialog.open());
             final String[] lastTrack = {trackLabel()};
             track.update(() -> {
                 String lbl = trackLabel();
                 if (!lastTrack[0].equals(lbl)) { lastTrack[0] = lbl; track.setText(lbl); }
             });
-            // 曲名占满整行：colspan=全部列，避免与下方进度条共享高度、遮挡
-            bar.add(track).growX().pad(2f, 6f, 2f, 6f).colspan(10);
+            // 固定宽曲名列：无论曲名多长，悬浮条宽度不变（避免悬浮窗变长）
+            bar.add(track).width(Scl.scl(300f)).pad(2f, 6f, 2f, 6f).colspan(10).left();
 
             bar.row();
             // 进度条（独立一行，加高并上下留白，避免滑杆圆钮越界遮挡上方曲名/按钮文字）
@@ -255,6 +256,67 @@ public class MusicBar {
                 }
             }
             super.draw();
+        }
+    }
+
+    /**
+     * 长曲名「循环显示」滚动标签：文本超出自身宽度时自动横向滚动（无缝回绕），
+     * 超出则剪裁到自身区域；文本长度未超出时不滚动、行为等同普通 Label。
+     * 顶栏用自绘 scissor 限定剪裁边界，避免滚动文本溢出到相邻控件。
+     */
+    static class MarqueeLabel extends arc.scene.ui.Label {
+        private float scroll = 0f;
+        private String lastKey = "";
+
+        MarqueeLabel(CharSequence text, LabelStyle style) {
+            super(text, style);
+            setWrap(false);
+            setEllipsis(false);
+            setAlignment(Align.left);
+        }
+
+        private String textKey() {
+            return this.text.toString();
+        }
+
+        @Override
+        public void act(float delta) {
+            super.act(delta);
+            String key = textKey();
+            if (!lastKey.equals(key)) { lastKey = key; scroll = 0f; }
+            float cw = this.width;
+            if (cw > Scl.scl(1f) && getPrefWidth() > cw + Scl.scl(8f)) {
+                // 溢出 → 以「文本宽 + 间隙」为周期持续滚动，实现无缝循环显示
+                scroll = (scroll + delta * Scl.scl(36f)) % (getPrefWidth() + Scl.scl(48f));
+            } else {
+                scroll = 0f;
+            }
+        }
+
+        @Override
+        public void draw() {
+            float cw = this.width;
+            float tw = getPrefWidth();
+            if (cw <= Scl.scl(1f) || tw <= cw + Scl.scl(8f) || scroll == 0f) {
+                super.draw();
+                return;
+            }
+            float ox = this.x;
+            float period = tw + Scl.scl(48f);
+            float ph = scroll % period;
+            Draw.flush();
+            boolean clipped = ScissorStack.push(new Rect(this.x, this.y, cw, this.height));
+            try {
+                this.x = ox - ph;
+                super.draw();
+                this.x = ox - ph + period;
+                super.draw();
+            } finally {
+                this.x = ox;
+                Draw.flush();
+                if (clipped) ScissorStack.pop();
+                Draw.flush();
+            }
         }
     }
 

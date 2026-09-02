@@ -84,9 +84,8 @@ public class MusicPlayerDialog extends BaseDialog {
                 stateLbl[0].setColor(MusicPlayer.isPlaying() ? Pal.accent : Color.lightGray);
                 info.add(stateLbl[0]);
                 info.row();
-                nameLbl[0] = new arc.scene.ui.Label(nowPlayingLabel(), Styles.outlineLabel);
+                nameLbl[0] = new MusicBar.MarqueeLabel(nowPlayingLabel(), Styles.outlineLabel);
                 nameLbl[0].setColor(MusicPlayer.isPlaying() ? Color.white : Color.lightGray);
-                nameLbl[0].setEllipsis(true);
                 info.add(nameLbl[0]).growX().width(Scl.scl(280f));
             }).growX();
             // 每帧刷新状态与曲名（悬浮条/自动推进切换曲目时这里也跟着变）；仅内容变化时 setText 避免反复重排
@@ -301,8 +300,11 @@ public class MusicPlayerDialog extends BaseDialog {
             enable.setChecked(MusicPlayer.isEnabled());
             enable.changed(() -> MusicPlayer.setEnabled(enable.isChecked()));
             more.add(enable).left().growX();
-            more.button(Core.bundle.get("musicplayer.resetPos"), Styles.flatBordert, MusicBar::resetPosition)
-                    .height(Scl.scl(34f)).width(Scl.scl(120f)).right();
+            TextButton reset = new TextButton(Core.bundle.get("musicplayer.resetPos"), Styles.flatBordert);
+            reset.getLabel().setWrap(false);
+            reset.getLabel().setEllipsis(true);
+            reset.clicked(() -> MusicBar.resetPosition());
+            more.add(reset).height(Scl.scl(34f)).width(Scl.scl(120f)).right();
         }).growX().padTop(2f).row();
 
         // —— 曲目列表（置于底部并 growY 填满剩余高度，消除设置界面下方空白） ——
@@ -396,12 +398,12 @@ public class MusicPlayerDialog extends BaseDialog {
             Table row = new Table();
             if (isCurrent) row.background(Styles.grayPanel);
             row.defaults().pad(2f);
-            // 曲名（单行省略号，占满剩余宽度）→ 长名自动截断，不撑宽按钮破坏对齐
-            TextButton name = new TextButton((isCurrent ? "[accent]> " : "") + t.name, Styles.flatBordert);
-            name.getLabel().setWrap(false);
-            name.getLabel().setEllipsis(true);
-            name.clicked(() -> { MusicPlayer.play(idx); rebuild(); });
-            row.add(name).growX().height(Scl.scl(38f));
+            // 曲名（滚动循环显示 + 固定宽）→ 长名自动滚动、不撑宽按钮破坏对齐与行结构
+            MusicBar.MarqueeLabel name = new MusicBar.MarqueeLabel(
+                    (isCurrent ? "[accent]> " : "") + t.name, Styles.outlineLabel);
+            name.setColor(isCurrent ? Pal.accent : Color.white);
+            name.tapped(() -> { MusicPlayer.play(idx); rebuild(); });
+            row.add(name).width(Scl.scl(240f)).height(Scl.scl(38f)).growX();
             // 类型标签独立固定宽列，右对齐 —— 与曲名分离，列宽稳定不致长名挤压
             row.add("[gray](" + Core.bundle.get(t.typeKey) + ")").
                     width(Scl.scl(118f)).right().color(Color.gray);
