@@ -57,8 +57,14 @@ public class MusicPlayer {
     private static final Pattern DECODABLE_EXT = Pattern.compile("(?i)\\.(ogg|mp3|wav)$");
     /** 时长探测的文件大小上限（字节）：超过则跳过 Music.create 解码读取，避免大文件解码卡顿/占用过多内存 */
     private static final long LENGTH_PROBE_SIZE_LIMIT = 64L * 1024 * 1024;
+    /** 读时长而不拷贝时允许的文件大小上限：Music.create(f) 只解 header 求长度、不整文件解码，
+     *  故可放宽到 512MB（30–60 分钟常见码率音频常超 64MB，旧上限会误判成「不显示长度」）。
+     *  真正的整文件磁盘拷贝（localAsciiCopy）仍受 LENGTH_PROBE_SIZE_LIMIT 限制。 */
+    private static final long LENGTH_READ_SIZE_LIMIT = 512L * 1024 * 1024;
     /** 倍速最小值（对数滑杆 1/16–16x） */
     public static final float MIN_SPEED = 1f / 16f;
+    /** 格式嗅探探测窗口（字节）：要能覆盖带大 ID3v2 tag（含封面，可达数百 KB）的 mp3，把帧同步找到 */
+    private static final int PROBE_WINDOW = 1 * 1024 * 1024;
     private static final String CACHE_DIR = "music/";
 
     /**
@@ -577,7 +583,7 @@ public class MusicPlayer {
                 v.lastY = player.y;
             }
             // 本机恒在声源处 → 全音量；远程才做距离衰减。修复：本机音量不再乘以 0.12 的 BASE_VOLUME，避免几乎听不见。
-            float vol = v.isLocalOwner ? volume : calcListenVolume(v.lastX - player.x, v.lastY - player.y);
+            float vol = v.isLocalOwner ? effectiveVolume() : calcListenVolume(v.lastX - player.x, v.lastY - player.y);
             float pan = calcListenPan(v.lastX);
             // set(voiceId, pan, volume) 同时更新左右声像与音量（arc 中第2参为 pan、第3参为 volume；
             // 反向传入会把 pan 当 volume，声源在屏幕中央(pan≈0)时音量≈0 → 听不到声音）
@@ -589,7 +595,7 @@ public class MusicPlayer {
     static float calcListenVolume(float dx, float dy) {
         float dist = (float) Math.sqrt(dx * dx + dy * dy);
         float factor = clamp(1f - dist / FALLOFF_RADIUS, 0f, 1f);
-        return volume * factor * BASE_VOLUME;
+        return clamp(volume * factor * BASE_VOLUME, 0f, MAX_EFF_VOL);
     }
 
     /** 按声源在世界 x 相对监听视角（相机）的水平偏移计算左右声像（-0.9 左 … 0.9 右） */
@@ -763,7 +769,7 @@ public class MusicPlayer {
                 return;
             }
             snd = Sound.createStream(file);
-            int id = snd.play(volume, pitch * speed, 0f);
+            int id = snd.play(effectiveVolume(), pitch * speed, 0f);
             Core.audio.setLooping(id, loopMode == LOOP_ONE);
             localVoiceId = id;
             playing = true;
@@ -869,6 +875,18 @@ public class MusicPlayer {
     public static float volume() {
         return volume;
     }
+
+    /**
+     * 应用到 Soloud 的实际音量倍数（0..MAX_EFF_VOL）。
+     * UI 允许滑到 0–1000%（volume 存原始 0..10），但 100% 即 1.0 倍已属正常响度，
+     * 更高倍数直接原样灌 Soloud 会硬削波失真/破音——这里把「超出正常档」的放大量封顶在一个
+     * 不削波的合理上限（MAX_EFF_VOL），既保留「0–1000% 可调」的 UI 语义，又不至于失真毁听感。
+     */
+    static float effectiveVolume() {
+        return clamp(volume, 0f, MAX_EFF_VOL);
+    }
+    /** 应用音量上限：超过即削波失真，封在该值避免爆音。100% = 1.0 */
+    private static final float MAX_EFF_VOL = 2.5f;
 
     public static void setPitch(float p) {
         pitch = p;
@@ -1012,7 +1030,7 @@ public class MusicPlayer {
         String key = f.absolutePath();
         if (!isAsciiPath(key)) return -1f; // 非 ASCII 路径不读（防 Soloud 内部锁崩溃），由 ASCII 缓存补齐
         if (!isDecodablePath(key)) return -1f; // flac/m4a/wma/aac/opus 无 Soloud 解码器，探测会原生失败 → 跳过
-        if (f.length() > LENGTH_PROBE_SIZE_LIMIT) return -1f; // 超大文件解码耗时/占内存，仅显示大小
+        if (f.length() > LENGTH_READ_SIZE_LIMIT) return -1f; // 超大文件解码耗时/占内存，仅显示大小
         Float cached = lengthCache.get(key);
         if (cached != null) return cached;
         float len = -1f;
@@ -1183,11 +1201,12 @@ public class MusicPlayer {
             // 读文件头嗅探真实容器格式（本地文件扩展名可能与内容不符 → 按内容落盘才能被 Soloud 识别解码）
             String ext = extensionFrom(t.source);
             try (java.io.InputStream in = src.read()) {
-                byte[] head = new byte[16];
-                int n = in.read(head);
+                // 探测窗口放大到 1MB，覆盖带大 ID3v2 tag（封面等可达数百 KB）的 mp3 —— 之前只读 16/4096 字节，tag 内找不到帧同步会误 null
+                byte[] probe = new byte[PROBE_WINDOW];
+                int n = in.read(probe);
                 if (n > 8) {
-                    byte[] h = new byte[Math.min(n, 4096)];
-                    System.arraycopy(head, 0, h, 0, h.length);
+                    byte[] h = new byte[n];
+                    System.arraycopy(probe, 0, h, 0, n);
                     String sn = sniffExt(h);
                     if (sn != null) ext = sn;
                 }
@@ -1308,7 +1327,7 @@ public class MusicPlayer {
     /** 读取文件头嗅探扩展名（供暂存收齐/本地复制用），失败返回 null */
     private static String sniffFileExt(Fi f) {
         try (java.io.InputStream in = f.read()) {
-            byte[] head = new byte[4096];
+            byte[] head = new byte[PROBE_WINDOW];
             int n = in.read(head);
             if (n < 12) return null;
             byte[] h = new byte[n];
@@ -1421,7 +1440,8 @@ public class MusicPlayer {
         }
     }
 
-    /** 按文件头 16 字节嗅探真实容器格式：取到 Soloud 可解码或已知格式的扩展名；无法识别返回 null */
+    /** 按文件头嗅探真实容器格式：取到 Soloud 可解码或已知格式的扩展名；无法识别返回 null。
+     *  覆盖：OggS / RIFF-WAVE / fLaC / ftyp(m4a) / ID3v1 / ID3v2(可跳过任意大 tag 找 MPEG 帧同步) / 裸 MPEG */
     private static String sniffExt(byte[] head) {
         if (head == null || head.length < 12) return null;
         if (startsWith(head, "OggS")) return ".ogg";
@@ -1430,13 +1450,26 @@ public class MusicPlayer {
         if (startsWith(head, "RIFF") && head.length >= 12 && head[8] == 'W' && head[9] == 'A' && head[10] == 'V' && head[11] == 'E') {
             return ".wav";
         }
-        if (startsWith(head, "ID3")) return ".mp3";
-        // MPEG 音频帧同步：0xFF 后高 3 bit 为 111（可能带填充字节，扫前 4096 字节内的帧头）
-        int n = Math.min(head.length, 4096);
-        for (int i = 0; i + 1 < n; i++) {
-            if ((head[i] & 0xFF) == 0xFF && (head[i + 1] & 0xE0) == 0xE0) return ".mp3";
+        // ID3v2：同步字 "ID3" + 版本 + 标志 + 4 字节同步安全大小（7 位/ byte），按它跳过整段 tag 再在音频区找帧同步
+        if (startsWith(head, "ID3") && head.length >= 10) {
+            int size = ((head[6] & 0x7F) << 21) | ((head[7] & 0x7F) << 14) | ((head[8] & 0x7F) << 7) | (head[9] & 0x7F);
+            int off = 10 + size;
+            if (findMpegFrame(head, Math.min(off, head.length))) return ".mp3";
+            return null;
         }
+        // 兜底：整个可控段内找裸 MPEG 帧同步（0xFF 高3位111）
+        if (findMpegFrame(head, 0)) return ".mp3";
         return null;
+    }
+
+    /** 在 head 内从 start 起找 MPEG 帧同步（0xFF 后高 3 位全 1）；找到返回 true。
+     *  扫描上限取探测窗口，足以穿透大 ID3v2 tag */
+    private static boolean findMpegFrame(byte[] head, int start) {
+        int n = Math.min(head.length, PROBE_WINDOW);
+        for (int i = start; i + 1 < n; i++) {
+            if ((head[i] & 0xFF) == 0xFF && (head[i + 1] & 0xE0) == 0xE0) return true;
+        }
+        return false;
     }
 
     private static boolean startsWith(byte[] b, String s) {
