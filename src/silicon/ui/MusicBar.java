@@ -158,6 +158,24 @@ public class MusicBar {
             });
             bar.add(albumBtn).width(Scl.scl(112f)).pad(1f);
 
+            // 循环模式快捷按钮：点击在 6 种模式间循环；宽度自适应文字（不再固定小格导致长文案挤压/换行）
+            TextButton loopBtn = new TextButton(loopModeLabel(), Styles.flatBordert);
+            loopBtn.getLabel().setWrap(false);
+            loopBtn.getLabel().setEllipsis(true);
+            loopBtn.getLabel().setFontScale(Scl.scl(0.85f));
+            loopBtn.setColor(Pal.accent);
+            final String[] lastLoop = {loopModeLabel()};
+            loopBtn.update(() -> {
+                String lbl = loopModeLabel();
+                if (!lastLoop[0].equals(lbl)) { lastLoop[0] = lbl; loopBtn.setText(lbl); }
+            });
+            loopBtn.clicked(() -> {
+                MusicPlayer.cycleLoopMode();
+                lastLoop[0] = loopModeLabel();
+                loopBtn.setText(lastLoop[0]);
+            });
+            bar.add(loopBtn).pad(1f);
+
             // 设置按钮：打开音乐播放器设置页
             iconBtn(bar, Icon.settings, MusicPlayerDialog::open).pad(1f);
 
@@ -165,21 +183,22 @@ public class MusicBar {
             iconBtn(bar, Icon.down, () -> { collapsed = true; detach(); }).pad(1f);
 
             bar.row();
-            // 曲名（可点开设置页）：滚动循环显示 + 固定宽，杜绝长曲名撑宽悬浮条/长按钮
+            // 曲名（可点开设置页）：滚动循环显示 + 上限宽（占满整行剩余空间），杜绝长曲名撑宽悬浮条
             MarqueeLabel track = new MarqueeLabel(trackLabel(), Styles.outlineLabel);
             track.setColor(Color.white);
+            track.maxPref = Scl.scl(530f);
             track.clicked(() -> MusicPlayerDialog.open());
             final String[] lastTrack = {trackLabel()};
             track.update(() -> {
                 String lbl = trackLabel();
                 if (!lastTrack[0].equals(lbl)) { lastTrack[0] = lbl; track.setText(lbl); }
             });
-            // 固定宽曲名列：无论曲名多长，悬浮条宽度不变（避免悬浮窗变长）
-            bar.add(track).width(Scl.scl(300f)).pad(2f, 6f, 2f, 6f).colspan(10).left();
+            // 曲名列 growX 用满整行宽度（宽度由 maxPref 上限保证），文本超上限才滚动
+            bar.add(track).growX().pad(2f, 6f, 2f, 6f).colspan(11).left();
 
             bar.row();
             // 进度条（独立一行，加高并上下留白，避免滑杆圆钮越界遮挡上方曲名/按钮文字）
-            bar.add(seekSlider()).growX().height(Scl.scl(24f)).colspan(10).pad(3f, 6f, 3f, 6f);
+            bar.add(seekSlider()).growX().height(Scl.scl(24f)).colspan(11).pad(3f, 6f, 3f, 6f);
             // 展开态多了一行 → 需要多 rebuild 一次，交给 update 的空重建逻辑
         }
 
@@ -262,17 +281,28 @@ public class MusicBar {
     /**
      * 长曲名「循环显示」滚动标签：文本超出自身宽度时自动横向滚动（无缝回绕），
      * 超出则剪裁到自身区域；文本长度未超出时不滚动、行为等同普通 Label。
-     * 顶栏用自绘 scissor 限定剪裁边界，避免滚动文本溢出到相邻控件。
+     * - maxPref（0=不限）：限制 getPrefWidth 的上限，使 cell 占满可用宽度又不把 Table 撑长，
+     *   且只有文本真的超过「可用宽度」才开始滚动（解决「长度足够却仍滚动」的问题）。
+     * - 滚动间隙加大，进入副本与离开副本之间存在干净空白，避免相邻被遮挡。
      */
     static class MarqueeLabel extends arc.scene.ui.Label {
+        public float maxPref = 0f;
         private float scroll = 0f;
         private String lastKey = "";
+        /** 滚动回绕间隙（文本副本之间的空白，越大越不易与相邻列文字重叠） */
+        private static final float GAP = 64f;
 
         MarqueeLabel(CharSequence text, LabelStyle style) {
             super(text, style);
             setWrap(false);
             setEllipsis(false);
             setAlignment(Align.left);
+        }
+
+        @Override
+        public float getPrefWidth() {
+            float p = super.getPrefWidth();
+            return maxPref > 0f ? Math.min(p, maxPref) : p;
         }
 
         private String textKey() {
@@ -285,9 +315,10 @@ public class MusicBar {
             String key = textKey();
             if (!lastKey.equals(key)) { lastKey = key; scroll = 0f; }
             float cw = this.width;
-            if (cw > Scl.scl(1f) && getPrefWidth() > cw + Scl.scl(8f)) {
+            float gw = Scl.scl(8f);
+            if (cw > Scl.scl(1f) && getPrefWidth() > cw + gw) {
                 // 溢出 → 以「文本宽 + 间隙」为周期持续滚动，实现无缝循环显示
-                scroll = (scroll + delta * Scl.scl(36f)) % (getPrefWidth() + Scl.scl(48f));
+                scroll = (scroll + delta * Scl.scl(36f)) % (getPrefWidth() + Scl.scl(GAP));
             } else {
                 scroll = 0f;
             }
@@ -302,7 +333,7 @@ public class MusicBar {
                 return;
             }
             float ox = this.x;
-            float period = tw + Scl.scl(48f);
+            float period = tw + Scl.scl(GAP);
             float ph = scroll % period;
             Draw.flush();
             boolean clipped = ScissorStack.push(new Rect(this.x, this.y, cw, this.height));
@@ -436,6 +467,11 @@ public class MusicBar {
         if (Math.abs(s - 1f) < 0.001f) return "1x";
         if (Math.abs(s - Math.round(s)) < 0.001f) return Math.round(s) + "x";
         return String.format("%.2fx", s);
+    }
+
+    /** 悬浮条循环按钮文字：当前循环模式（6 种中文文案） */
+    private static String loopModeLabel() {
+        return Core.bundle.get("musicplayer.loopmode." + MusicPlayer.loopMode());
     }
 
     /** 在「全部曲目」与各专辑间轮换激活专辑作用域（点按悬浮条专辑按钮） */

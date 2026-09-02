@@ -45,6 +45,7 @@ public class MusicPlayer {
     private static final String CFG_SPEED = "musicplayer.speed";
     private static final String CFG_AB_A = "musicplayer.ab.a";
     private static final String CFG_AB_B = "musicplayer.ab.b";
+    private static final String CFG_REVERSE = "musicplayer.reverse";
 
     private static final String[] INTERNAL_KEYS = {
         "game1","game2","game3","game4","game5","game6","game7","game8","game9",
@@ -95,6 +96,8 @@ public class MusicPlayer {
     /** A-B 区间两点（秒）；<0 表示未设置。两点按 min/max 取区间，可实现区间重复 */
     private static float abA = -1f;
     private static float abB = -1f;
+    /** 倒放开关：开启时播放进度持续回退（每帧按 时间*速率 反向 seek），近似倒着听；到达开头自动停止 */
+    private static boolean reverse = false;
 
     /** 专辑：一组曲目（存放曲目 cacheHash 引用），可按专辑整体播放 */
     public static class Album {
@@ -195,6 +198,7 @@ public class MusicPlayer {
         current = Core.settings.getInt(CFG_LAST, -1);
         abA = Core.settings.getFloat(CFG_AB_A, -1f);
         abB = Core.settings.getFloat(CFG_AB_B, -1f);
+        reverse = Core.settings.getBool(CFG_REVERSE, false);
         loadTracks();
         loadAlbums();
         String alb = Core.settings.getString(CFG_ALBUM, "");
@@ -273,6 +277,23 @@ public class MusicPlayer {
         if (a == null || trackIndex < 0 || trackIndex >= tracks.size) return;
         a.hashes.addAll(tracks.get(trackIndex).cacheHash);
         saveAlbums();
+    }
+
+    /** 按专辑名把某曲目 hash 加入专辑（不存在该专辑名则创建）。用于「当前筛选下导入新曲自动归入当前专辑」 */
+    public static void addTrackHashToAlbum(String albumName, String hash) {
+        if (albumName == null || albumName.trim().isEmpty() || hash == null || hash.isEmpty()) return;
+        Album target = null;
+        for (Album a : albums) {
+            if (albumName.equals(a.name)) { target = a; break; }
+        }
+        if (target == null) {
+            target = new Album(albumName.trim());
+            albums.add(target);
+        }
+        if (!target.hashes.contains(hash)) {
+            target.hashes.add(hash);
+            saveAlbums();
+        }
     }
 
     public static void removeFromAlbum(int albumIndex, int trackIndex) {
@@ -398,6 +419,20 @@ public class MusicPlayer {
             float s = pendingResumeSeek;
             pendingResumeSeek = -1f;
             seek(s);
+        }
+        // 倒放：进度持续推进按「帧时长 × 实际速率」反向回退（近似倒着播放）。
+        // 每帧 seek 会刷新 lastSeekAt，天然屏蔽自动推进/AB 区间逻辑；回退到开头则停播（保留开关状态）。
+        if (reverse) {
+            float step = Math.max(0.02f, Time.delta * Math.max(0.05f, pitch * speed));
+            float target = currentTime() - step;
+            if (target <= 0f) {
+                stopLocal();
+                bcast("stop");
+            } else {
+                seek(target);
+                lastBlip = Time.time;
+            }
+            return;
         }
         // A-B 区间循环：进度到达 B 点（hi）后回转到 A 点（lo），实现区间重复
         if (hasAb()) {
@@ -687,13 +722,6 @@ public class MusicPlayer {
 
     private static void beginPlayback(int index) {
         MusicTrack t = tracks.get(index);
-        // flac/m4a/wma/aac/opus 等 Soloud 无内置解码器：直接创建声源会原生崩溃 → 阻止并在日志说明（仅排除本机解码，仍可分享字节给他人）
-        if (t != null && (t.isUrl() || t.isLocal()) && !isDecodablePath(t.source)) {
-            Log.warn("Blocked play of undecodable " + t.name + " (Soloud only decodes ogg/mp3/wav)");
-            playing = false;
-            localVoiceId = -1;
-            return;
-        }
         Fi file = resolveToPlayableFile(t);
         if (file == null || !file.exists()) {
             if (t != null && t.isUrl()) {
@@ -709,6 +737,16 @@ public class MusicPlayer {
             }
             SiliconLog.log("Cannot resolve " + (t == null ? "?" : t.name) + " to a local file");
             return;
+        }
+        // flac/m4a/wma/aac/opus 等 Soloud 无内置解码器：以「最终可播放文件」的扩展名判定（缓存文件已按真实内容头落盘），
+        // 直接创建声源会原生崩溃 → 阻止并在日志说明（仅排除本机解码，仍可分享字节给他人）
+        if (t.isUrl() || t.isLocal()) {
+            if (!isDecodablePath(file.absolutePath())) {
+                Log.warn("Blocked play of undecodable " + t.name + " (Soloud only decodes ogg/mp3/wav)");
+                playing = false;
+                localVoiceId = -1;
+                return;
+            }
         }
         // 内置曲目是 jar 打包资源，无真实磁盘路径，Soloud 无法流式读取 → 先提取为真实缓存文件
         if (t.isInternal()) {
@@ -822,7 +860,7 @@ public class MusicPlayer {
     }
 
     public static void setVolume(float v) {
-        volume = clamp(v, 0f, 1f);
+        volume = clamp(v, 0f, 10f); // 0–1000%（对数滑杆输入；本值直接作为 Soloud 音量倍数）
         Core.settings.put(CFG_VOLUME, volume);
         // 统一交给 refreshVolumes 按本地/远程口径应用（含 pan），避免重复 native 调用
         refreshVolumes();
@@ -948,13 +986,21 @@ public class MusicPlayer {
             Fi f = resolveToPlayableFile(t);
             return f == null ? -1f : readLengthFrom(f);
         }
-        // 本地曲目：直接读原始文件（长度/大小都不需要拷贝）；路径 ASCII 也满足
+        // 本地曲目：优先读原始文件（长度/大小都不需要拷贝）；路径 ASCII 也满足。
+        // 非 ASCII 原始路径读不出时长时，若无 ASCII 缓存则顺手做一次复制（限大小内），
+        // 让无中文路径也能立即显示时长（播放时仍会复用该缓存副本）
         Fi orig = originalLocalFile(t);
         float len = orig == null ? -1f : readLengthFrom(orig);
-        // 非 ASCII 原始路径读取失败 → 回退已有 ASCII 缓存（不做新拷贝）
         if (len <= 0f) {
             Fi cached = cacheFileOf(t);
-            if (cached != null && cached.exists()) len = readLengthFrom(cached);
+            if (cached != null && cached.exists()) {
+                len = readLengthFrom(cached);
+            } else if (orig != null && orig.exists()
+                    && orig.isDirectory() == false
+                    && orig.length() > 0 && orig.length() <= LENGTH_PROBE_SIZE_LIMIT) {
+                Fi safe = localAsciiCopy(t, orig);
+                if (safe != null && safe.exists()) len = readLengthFrom(safe);
+            }
         }
         return len;
     }
@@ -1064,6 +1110,20 @@ public class MusicPlayer {
         setLoopMode((loopMode + 1) % 6);
     }
 
+    public static boolean isReverse() {
+        return reverse;
+    }
+
+    /** 切换倒放：开启后进度持续回退；关闭恢复正向。切换不影响当前播放 */
+    public static void toggleReverse() {
+        reverse = !reverse;
+        Core.settings.put(CFG_REVERSE, reverse);
+        if (reverse) {
+            lastBlip = Time.time;
+            lastSeekAt = Time.time;
+        }
+    }
+
     public static void next() {
         if (!enabled || tracks.size == 0) return;
         if (advanceSafely(1)) bcast("next");
@@ -1117,15 +1177,29 @@ public class MusicPlayer {
         return null; // URL 未缓存由网络层下载
     }
 
-    /** 把本地文件内容复制到 ASCII 安全的缓存路径（<hash>.<ext>），供 Soloud 流式读取；失败返回 null */
+    /** 把本地文件内容复制到 ASCII 安全的缓存路径（<hash>.<真实ext>），供 Soloud 流式读取；失败返回 null */
     private static Fi localAsciiCopy(MusicTrack t, Fi src) {
         try {
-            Fi out = cacheFileForHash(t.cacheHash, extensionFrom(t.source));
+            // 读文件头嗅探真实容器格式（本地文件扩展名可能与内容不符 → 按内容落盘才能被 Soloud 识别解码）
+            String ext = extensionFrom(t.source);
+            try (java.io.InputStream in = src.read()) {
+                byte[] head = new byte[16];
+                int n = in.read(head);
+                if (n > 8) {
+                    byte[] h = new byte[Math.min(n, 4096)];
+                    System.arraycopy(head, 0, h, 0, h.length);
+                    String sn = sniffExt(h);
+                    if (sn != null) ext = sn;
+                }
+            }
+            String e = ext == null ? ".ogg" : ext;
+            evictHashVariants(t.cacheHash, e);
+            Fi out = cacheFileForHash(t.cacheHash, e);
             if (out.exists()) return out;
             out.parent().mkdirs();
             // 避免超大文件一次性读入内存：用流拷贝到缓存
             out.write(src.read(), false);
-            hashExt.put(t.cacheHash, extensionFrom(t.source));
+            hashExt.put(t.cacheHash, e);
             return out.exists() ? out : null;
         } catch (Exception e) {
             SiliconLog.log("Local ascii-copy fail " + t.name + ": " + e.getMessage());
@@ -1174,7 +1248,10 @@ public class MusicPlayer {
     private static final ObjectMap<String, String> hashExt = new ObjectMap<>();
 
     public static Fi cacheFileOf(MusicTrack t) {
-        return cacheFileForHash(t.cacheHash, extensionFrom(t.source));
+        // 优先按已登记/已扫描出的真实扩展名找缓存：URL 无扩展名或下载内容是另种格式时，
+        // 落盘文件扩展名可能与 t.source 推导的不同（如 URL 无扩展名、内容实为 mp3），必须用 resolveExt 对齐
+        String e = resolveExt(t.cacheHash);
+        return cacheFile(t.cacheHash + (e != null ? e : extensionFrom(t.source)));
     }
 
     /** 登记某 hash 的真实扩展名（网络接收侧写/查缓存前调用） */
@@ -1208,12 +1285,16 @@ public class MusicPlayer {
         return cacheFile(hash + ".part");
     }
 
-    /** 分块全部收齐后：把暂存文件重命名为正式缓存 `<hash>.<ext>` 并登记扩展名 */
+    /** 分块全部收齐后：把暂存文件重命名为正式缓存 `<hash>.<ext>` 并登记扩展名（先按内容头修正扩展名） */
     public static boolean finalizeCache(String hash, String ext) {
         try {
             String e = (ext == null || ext.isEmpty()) ? resolveExt(hash) : normalizeExt(ext);
             Fi staging = stagingFile(hash);
             if (staging == null || !staging.exists()) return false;
+            // 嗅探收集到的文件内容头，与实际容器格式不一致则落到正确扩展名（如 owner 广播的 ext 与真实格式不符）
+            String sn = sniffFileExt(staging);
+            if (sn != null) e = sn;
+            evictHashVariants(hash, e);
             Fi finalFile = cacheFileForHash(hash, e);
             staging.moveTo(finalFile);
             hashExt.put(hash, e);
@@ -1221,6 +1302,20 @@ public class MusicPlayer {
         } catch (Exception ex) {
             SiliconLog.log("Cache finalize fail " + hash + ": " + ex.getMessage());
             return false;
+        }
+    }
+
+    /** 读取文件头嗅探扩展名（供暂存收齐/本地复制用），失败返回 null */
+    private static String sniffFileExt(Fi f) {
+        try (java.io.InputStream in = f.read()) {
+            byte[] head = new byte[4096];
+            int n = in.read(head);
+            if (n < 12) return null;
+            byte[] h = new byte[n];
+            System.arraycopy(head, 0, h, 0, n);
+            return sniffExt(h);
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -1237,12 +1332,11 @@ public class MusicPlayer {
         }
     }
 
-    /** 解析 hash 对应缓存文件的真实扩展名：优先已登记/已知，否则扫缓存目录 `<hash>.*`（跨重启命中） */
+    /** 解析 hash 对应缓存文件的真实扩展名：优先扫缓存目录 `<hash>.*`（磁盘事实，可跨重启命中），
+     *  其次用已登记扩展名，最后兜底 .ogg */
     private static String resolveExt(String hash) {
         if (hash == null || hash.isEmpty()) return null;
-        String known = hashExt.get(hash);
-        if (known != null) return known;
-        // 未登记：扫缓存目录找 <hash>.<任意ext>
+        // 磁盘扫描优先：若缓存目录存在 <hash>.<真实ext>，以磁盘为准（URL 内容格式可能与 URL 扩展名不一致）
         try {
             Fi dir = cacheRoot();
             if (dir != null && dir.isDirectory()) {
@@ -1258,6 +1352,8 @@ public class MusicPlayer {
             }
         } catch (Exception ignored) {
         }
+        String known = hashExt.get(hash);
+        if (known != null) return known;
         hashExt.put(hash, ".ogg");
         return ".ogg";
     }
@@ -1285,7 +1381,7 @@ public class MusicPlayer {
         return ".ogg";
     }
 
-    /** 写缓存（URL 下载 / 二进制共享落地统一走这里）；按真实扩展名命名 */
+    /** 写缓存（URL 下载 / 二进制共享落地统一走这里）；先嗅探真实格式修正扩展名，再按真实扩展名命名 */
     static boolean writeCacheBytes(String hash, byte[] data) {
         String ext = hashExt.get(hash, ".ogg");
         return writeCacheBytes(hash, ext, data);
@@ -1293,16 +1389,70 @@ public class MusicPlayer {
 
     static boolean writeCacheBytes(String hash, String ext, byte[] data) {
         try {
-            Fi file = cacheFileForHash(hash, ext);
+            // 按文件内容轮廓嗅探真实格式：URL/流式链接缺少扩展名或内容与后缀不符时，落到正确扩展名才能被 Soloud 解码
+            String detected = sniffExt(data);
+            if (detected != null) ext = detected;
+            String e = ext == null ? ".ogg" : ext;
+            evictHashVariants(hash, e);
+            Fi file = cacheFileForHash(hash, e);
             try (OutputStream out = file.write(false)) {
                 out.write(data);
             }
-            hashExt.put(hash, ext == null ? ".ogg" : ext);
+            hashExt.put(hash, e);
             return true;
         } catch (Exception e) {
             SiliconLog.log("Cache write fail " + hash + ": " + e.getMessage());
             return false;
         }
+    }
+
+    /** 删除该 hash 下除 keepExt 以外的旧缓存变体（<hash>.mp3/.ogg 并存会令扫描取到过期文件） */
+    private static void evictHashVariants(String hash, String keepExt) {
+        try {
+            Fi dir = cacheRoot();
+            if (dir == null || !dir.isDirectory()) return;
+            for (Fi f : dir.list()) {
+                if (f == null || !hash.equals(f.nameWithoutExtension())) continue;
+                if ("part".equalsIgnoreCase(f.extension())) continue;
+                if (keepExt != null && keepExt.equalsIgnoreCase("." + f.extension())) continue;
+                f.delete();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** 按文件头 16 字节嗅探真实容器格式：取到 Soloud 可解码或已知格式的扩展名；无法识别返回 null */
+    private static String sniffExt(byte[] head) {
+        if (head == null || head.length < 12) return null;
+        if (startsWith(head, "OggS")) return ".ogg";
+        if (startsWith(head, "fLaC")) return ".flac";
+        if (startsWith(head, 4, "ftyp")) return ".m4a";
+        if (startsWith(head, "RIFF") && head.length >= 12 && head[8] == 'W' && head[9] == 'A' && head[10] == 'V' && head[11] == 'E') {
+            return ".wav";
+        }
+        if (startsWith(head, "ID3")) return ".mp3";
+        // MPEG 音频帧同步：0xFF 后高 3 bit 为 111（可能带填充字节，扫前 4096 字节内的帧头）
+        int n = Math.min(head.length, 4096);
+        for (int i = 0; i + 1 < n; i++) {
+            if ((head[i] & 0xFF) == 0xFF && (head[i + 1] & 0xE0) == 0xE0) return ".mp3";
+        }
+        return null;
+    }
+
+    private static boolean startsWith(byte[] b, String s) {
+        if (b.length < s.length()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            if ((char) (b[i] & 0xFF) != s.charAt(i)) return false;
+        }
+        return true;
+    }
+
+    private static boolean startsWith(byte[] b, int off, String s) {
+        if (b.length < off + s.length()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            if ((char) (b[off + i] & 0xFF) != s.charAt(i)) return false;
+        }
+        return true;
     }
 
     // ------------------------------------------------------------------

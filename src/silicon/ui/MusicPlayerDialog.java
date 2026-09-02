@@ -74,7 +74,7 @@ public class MusicPlayerDialog extends BaseDialog {
 
             // 右侧：状态标题 + 曲名
             final arc.scene.ui.Label[] stateLbl = new arc.scene.ui.Label[1];
-            final arc.scene.ui.Label[] nameLbl = new arc.scene.ui.Label[1];
+            final MusicBar.MarqueeLabel[] nameLbl = new MusicBar.MarqueeLabel[1];
             now.table(info -> {
                 info.defaults().left();
                 stateLbl[0] = new arc.scene.ui.Label(MusicPlayer.isPlaying()
@@ -86,7 +86,9 @@ public class MusicPlayerDialog extends BaseDialog {
                 info.row();
                 nameLbl[0] = new MusicBar.MarqueeLabel(nowPlayingLabel(), Styles.outlineLabel);
                 nameLbl[0].setColor(MusicPlayer.isPlaying() ? Color.white : Color.lightGray);
-                info.add(nameLbl[0]).growX().width(Scl.scl(280f));
+                // 自适应宽度：占满「现在播放」面板剩余空间（maxPref 是滚动触发的上限，文本超宽才开始循环显示）
+                nameLbl[0].maxPref = Scl.scl(520f);
+                info.add(nameLbl[0]).growX().padRight(6f);
             }).growX();
             // 每帧刷新状态与曲名（悬浮条/自动推进切换曲目时这里也跟着变）；仅内容变化时 setText 避免反复重排
             final String[] lastNow = {""};
@@ -191,41 +193,45 @@ public class MusicPlayerDialog extends BaseDialog {
         // —— 音量 / 音高 / 倍速（三个并排面板合为一行） ——
         cont.table(analog -> {
             analog.defaults().pad(2f);
-            // 音量面板
+            // 音量面板（对数 0.001–10 = 0–1000%）
             analog.table(vp -> {
                 vp.background(Styles.grayPanel);
                 vp.margin(6f);
                 vp.defaults().pad(2f);
-                vp.add(Core.bundle.get("musicplayer.volume")).left().width(Scl.scl(42f));
-                Slider vol = new Slider(0f, 1f, 0.05f, false);
-                vol.setValue(MusicPlayer.volume());
-                final arc.scene.ui.Label volVal = new arc.scene.ui.Label(Math.round(MusicPlayer.volume() * 100) + "%", Styles.outlineLabel);
+                vp.add(Core.bundle.get("musicplayer.volume")).left().width(Scl.scl(46f));
+                Slider vol = new Slider(0f, 1f, 0.001f, false);
+                vol.setValue(volumeToCursor(MusicPlayer.volume()));
+                final arc.scene.ui.Label volVal = new arc.scene.ui.Label(volumeText(MusicPlayer.volume()), Styles.outlineLabel);
                 volVal.setColor(Color.white);
                 vol.update(() -> {
-                    if (!vol.isDragging() && Math.abs(vol.getValue() - MusicPlayer.volume()) > 0.01f) vol.setValue(MusicPlayer.volume());
-                    volVal.setText(Math.round(vol.getValue() * 100) + "%");
+                    if (!vol.isDragging() && Math.abs(vol.getValue() - volumeToCursor(MusicPlayer.volume())) > 0.001f) {
+                        vol.setValue(volumeToCursor(MusicPlayer.volume()));
+                    }
+                    volVal.setText(volumeText(cursorToVolume(vol.getValue())));
                 });
-                vol.changed(() -> MusicPlayer.setVolume(vol.getValue()));
+                vol.changed(() -> MusicPlayer.setVolume(cursorToVolume(vol.getValue())));
                 vp.add(vol).growX().width(Scl.scl(120f));
-                vp.add(volVal).width(Scl.scl(52f)).right().padLeft(4f);
+                vp.add(volVal).width(Scl.scl(62f)).right().padLeft(4f);
             }).growX();
-            // 音高面板
+            // 音高面板（对数 0.1–10x）
             analog.table(pp -> {
                 pp.background(Styles.grayPanel);
                 pp.margin(6f);
                 pp.defaults().pad(2f);
-                pp.add(Core.bundle.get("musicplayer.pitch")).left().width(Scl.scl(42f));
-                Slider pit = new Slider(0.5f, 2f, 0.05f, false);
-                pit.setValue(MusicPlayer.pitch());
+                pp.add(Core.bundle.get("musicplayer.pitch")).left().width(Scl.scl(46f));
+                Slider pit = new Slider(0f, 1f, 0.001f, false);
+                pit.setValue(pitchToCursor(MusicPlayer.pitch()));
                 final arc.scene.ui.Label pitVal = new arc.scene.ui.Label(String.format("%.2fx", MusicPlayer.pitch()), Styles.outlineLabel);
                 pitVal.setColor(Color.white);
                 pit.update(() -> {
-                    if (!pit.isDragging() && Math.abs(pit.getValue() - MusicPlayer.pitch()) > 0.01f) pit.setValue(MusicPlayer.pitch());
-                    pitVal.setText(String.format("%.2fx", pit.getValue()));
+                    if (!pit.isDragging() && Math.abs(pit.getValue() - pitchToCursor(MusicPlayer.pitch())) > 0.001f) {
+                        pit.setValue(pitchToCursor(MusicPlayer.pitch()));
+                    }
+                    pitVal.setText(String.format("%.2fx", cursorToPitch(pit.getValue())));
                 });
-                pit.changed(() -> MusicPlayer.setPitch(pit.getValue()));
+                pit.changed(() -> MusicPlayer.setPitch(cursorToPitch(pit.getValue())));
                 pp.add(pit).growX().width(Scl.scl(120f));
-                pp.add(pitVal).width(Scl.scl(52f)).right().padLeft(4f);
+                pp.add(pitVal).width(Scl.scl(62f)).right().padLeft(4f);
             }).growX();
             // 倍速面板
             analog.table(sp -> {
@@ -276,19 +282,28 @@ public class MusicPlayerDialog extends BaseDialog {
             }).height(Scl.scl(32f)).width(Scl.scl(86f));
         }).growX().padTop(2f).row();
 
-        // —— 底部：循环模式 / 停止 / 添加曲目（uniform 等宽防文字变化抖动）——
+        // —— 底部：循环模式（自适应宽度）/ 倒放 / 停止 / 添加曲目 ——
         cont.table(bottom -> {
-            bottom.defaults().growX().height(Scl.scl(38f)).pad(2f).uniform();
-            TextButton loop = new TextButton(Core.bundle.get("musicplayer.loopmode." + MusicPlayer.loopMode()), Styles.flatBordert);
+            TextButton loop = new TextButton(loopModeText(), Styles.flatBordert);
+            loop.getLabel().setWrap(false);
+            loop.getLabel().setEllipsis(true);
+            loop.getLabel().setFontScale(Scl.scl(0.9f));
             loop.clicked(() -> {
                 MusicPlayer.cycleLoopMode();
-                loop.setText(Core.bundle.get("musicplayer.loopmode." + MusicPlayer.loopMode()));
+                loop.setText(loopModeText());
             });
-            bottom.add(loop);
+            bottom.add(loop).pad(2f);
 
-            bottom.button(Core.bundle.get("musicplayer.stop"), Styles.flatBordert, MusicPlayer::stop);
+            TextButton rev = new TextButton(Core.bundle.get("musicplayer.reverse"), Styles.flatBordert);
+            rev.getLabel().setWrap(false);
+            rev.getLabel().setFontScale(Scl.scl(0.9f));
+            final TextButton revF = rev;
+            revF.update(() -> revF.getLabel().setColor(MusicPlayer.isReverse() ? Pal.accent : Color.white));
+            revF.clicked(() -> MusicPlayer.toggleReverse());
+            bottom.add(rev).width(Scl.scl(84f)).pad(2f);
 
-            bottom.button(Core.bundle.get("musicplayer.addTrack"), Styles.flatBordert, this::showAddDialog);
+            bottom.button(Core.bundle.get("musicplayer.stop"), Styles.flatBordert, MusicPlayer::stop).growX().pad(2f);
+            bottom.button(Core.bundle.get("musicplayer.addTrack"), Styles.flatBordert, this::showAddDialog).growX().pad(2f);
         }).growX().padTop(2f).row();
 
         // —— 更多设置：启用开关 + 悬浮条复位（紧凑面板，尽量缩小留白） ——
@@ -302,9 +317,9 @@ public class MusicPlayerDialog extends BaseDialog {
             more.add(enable).left().growX();
             TextButton reset = new TextButton(Core.bundle.get("musicplayer.resetPos"), Styles.flatBordert);
             reset.getLabel().setWrap(false);
-            reset.getLabel().setEllipsis(true);
+            reset.getLabel().setFontScale(Scl.scl(0.9f));
             reset.clicked(() -> MusicBar.resetPosition());
-            more.add(reset).height(Scl.scl(34f)).width(Scl.scl(120f)).right();
+            more.add(reset).height(Scl.scl(34f)).width(Scl.scl(150f)).right();
         }).growX().padTop(2f).row();
 
         // —— 曲目列表（置于底部并 growY 填满剩余高度，消除设置界面下方空白） ——
@@ -403,12 +418,17 @@ public class MusicPlayerDialog extends BaseDialog {
                     (isCurrent ? "[accent]> " : "") + t.name, Styles.outlineLabel);
             name.setColor(isCurrent ? Pal.accent : Color.white);
             name.clicked(() -> { MusicPlayer.play(idx); rebuild(); });
-            row.add(name).width(Scl.scl(240f)).height(Scl.scl(38f)).growX();
+            row.add(name).width(Scl.scl(250f)).height(Scl.scl(38f)).growX().padRight(10f);
             // 类型标签独立固定宽列，右对齐 —— 与曲名分离，列宽稳定不致长名挤压
             row.add("[gray](" + Core.bundle.get(t.typeKey) + ")").
-                    width(Scl.scl(118f)).right().color(Color.gray);
-            // 音频信息：时长 + 文件大小（右对齐固定宽列，保持各行对齐美观）
-            row.add(trackInfoLabel(t)).width(Scl.scl(100f)).right().padLeft(8f).padRight(4f).color(Color.gray);
+                    width(Scl.scl(116f)).right().color(Color.gray);
+            // 音频信息：时长 / 文件大小分列固定宽右对齐，各行严格对齐（不再混排进同一 Label 造成参差）
+            arc.scene.ui.Label timeLbl = new arc.scene.ui.Label(trackTimeText(t), Styles.outlineLabel);
+            timeLbl.setColor(Color.gray);
+            row.add(timeLbl).width(Scl.scl(52f)).right();
+            arc.scene.ui.Label sizeLbl = new arc.scene.ui.Label(trackSizeText(t), Styles.outlineLabel);
+            sizeLbl.setColor(Color.gray);
+            row.add(sizeLbl).width(Scl.scl(66f)).right().padLeft(6f);
             // 专辑归属按钮：点击弹出「加入/移出专辑」菜单
             ImageButton albumBtn = new ImageButton(Icon.folder, Styles.cleari);
             albumBtn.resizeImage(Scl.scl(16f));
@@ -527,24 +547,47 @@ public class MusicPlayerDialog extends BaseDialog {
         dlg.show();
     }
 
+    /** 在「当前筛选专辑」下导入的新曲自动归入该专辑（导入完成即出现在当前列表） */
+    private void autoAddToCurrentAlbum(MusicTrack t) {
+        if (filterAlbum == null || t == null) return;
+        MusicPlayer.addTrackHashToAlbum(filterAlbum, t.cacheHash);
+    }
+
     private void showAddDialog() {
         BaseDialog dlg = new BaseDialog(Core.bundle.get("musicplayer.addTitle"));
         dlg.cont.table(t -> {
-            t.button(Core.bundle.get("musicplayer.addInternal"), Styles.flatBordert, () -> {
+            addIconButton(t, Icon.book, "musicplayer.addInternal", () -> {
                 dlg.hide();
                 showInternalPicker();
-            }).width(Scl.scl(200f)).height(Scl.scl(44f)).row();
-            t.button(Core.bundle.get("musicplayer.addUrl"), Styles.flatBordert, () -> {
+            });
+            addIconButton(t, Icon.link, "musicplayer.addUrl", () -> {
                 dlg.hide();
                 showSourceInput(MusicTrack.URL);
-            }).width(Scl.scl(200f)).height(Scl.scl(44f)).row();
-            t.button(Core.bundle.get("musicplayer.addLocal"), Styles.flatBordert, () -> {
+            });
+            addIconButton(t, Icon.file, "musicplayer.addLocal", () -> {
                 dlg.hide();
                 showSourceInput(MusicTrack.LOCAL);
-            }).width(Scl.scl(200f)).height(Scl.scl(44f));
+            });
+            if (filterAlbum != null) {
+                t.add("[gray]" + Core.bundle.get("musicplayer.importToAlbum") + ": [accent]" + filterAlbum + "[]")
+                        .width(Scl.scl(250f)).padTop(6f);
+            }
         }).pad(10f);
         dlg.closeOnBack();
         dlg.show();
+    }
+
+    /** 导入界面用的图标+文字按钮（本 arc 的 TextButton 无「图标+文案」构造器，用表内 Image+TextButton 拼装） */
+    private static void addIconButton(Table parent, arc.scene.style.Drawable icon, String bundleKey, Runnable action) {
+        Table row = new Table();
+        arc.scene.ui.Image img = new arc.scene.ui.Image(icon);
+        img.setColor(Color.lightGray);
+        row.add(img).size(Scl.scl(24f)).padRight(8f);
+        TextButton b = new TextButton(Core.bundle.get(bundleKey), Styles.flatBordert);
+        b.getLabel().setWrap(false);
+        b.clicked(action);
+        row.add(b).width(Scl.scl(216f)).height(Scl.scl(48f));
+        parent.add(row).pad(3f).row();
     }
 
     private void showInternalPicker() {
@@ -585,7 +628,10 @@ public class MusicPlayerDialog extends BaseDialog {
                         String src = f.absolutePath();
                         if (src == null || src.isEmpty()) continue;
                         MusicTrack t = MusicPlayer.addTrack(MusicTrack.LOCAL, src, f.name());
-                        if (t != null) added.add(t);
+                        if (t != null) {
+                            added.add(t);
+                            autoAddToCurrentAlbum(t);
+                        }
                     }
                     if (added.size > 0) {
                         this.rebuild();
@@ -603,11 +649,18 @@ public class MusicPlayerDialog extends BaseDialog {
         TextField field = new TextField();
         field.setMessageText(Core.bundle.get("musicplayer.placeholderUrl"));
         dlg.cont.add(field).growX().pad(10f).row();
+        dlg.cont.add(Core.bundle.get("musicplayer.urlHint"));
+        dlg.cont.row();
         // 无效输入提示（初始隐藏，输入不合法时显示）
         final arc.scene.ui.Label err = new arc.scene.ui.Label(Core.bundle.get("musicplayer.invalid"), Styles.defaultLabel);
         err.setColor(Color.scarlet);
         err.visible = false;
         dlg.cont.add(err).growX().padTop(2f).row();
+        // 当前筛选专辑提示：导入后自动归入
+        if (filterAlbum != null) {
+            dlg.cont.add("[gray]" + Core.bundle.get("musicplayer.importToAlbum") + ": [accent]" + filterAlbum + "[]")
+                    .growX().padTop(2f).row();
+        }
         dlg.cont.button(Core.bundle.get("musicplayer.confirm"), Styles.flatBordert, () -> {
             String src = field.getText().trim();
             if (src.isEmpty()) { dlg.hide(); return; }
@@ -620,6 +673,7 @@ public class MusicPlayerDialog extends BaseDialog {
                 err.visible = true;
                 return;
             }
+            autoAddToCurrentAlbum(t);
             dlg.hide();
             rebuild();
         }).width(Scl.scl(120f)).height(Scl.scl(40f));
@@ -627,23 +681,66 @@ public class MusicPlayerDialog extends BaseDialog {
         dlg.show();
     }
 
-    /** 曲目信息标签：时长 + 文件大小（右对齐固定列宽保持对齐；未知显示占位符避免各行宽闪跳） */
-    private static String trackInfoLabel(MusicTrack t) {
-        StringBuilder sb = new StringBuilder();
+    /** 循环模式按钮文案（6 种，全部统一前缀，随当前模式取值） */
+    private static String loopModeText() {
+        return Core.bundle.get("musicplayer.loopmode." + MusicPlayer.loopMode());
+    }
+
+    // 音量对数映射（0.001–10 = 0–1000%）：音量 = 0.001 * 10000^cursor
+    private static final float VOL_MIN = 0.001f;
+    private static final float VOL_MAX = 10f;
+    private static final float VOL_RATIO = VOL_MAX / VOL_MIN;
+
+    private static float volumeToCursor(float volume) {
+        volume = Math.max(VOL_MIN, Math.min(VOL_MAX, volume));
+        return (float) (Math.log(volume / VOL_MIN) / Math.log(VOL_RATIO));
+    }
+
+    private static float cursorToVolume(float cursor) {
+        cursor = Math.max(0f, Math.min(1f, cursor));
+        return (float) (VOL_MIN * Math.pow(VOL_RATIO, cursor));
+    }
+
+    private static String volumeText(float volume) {
+        return Math.round(Math.max(0f, cursorToVolume(volumeToCursor(volume))) * 100) + "%";
+    }
+
+    // 音高对数映射（0.1–10x）：音高 = 0.1 * 100^cursor
+    private static final float PIT_MIN = 0.1f;
+    private static final float PIT_MAX = 10f;
+    private static final float PIT_RATIO = PIT_MAX / PIT_MIN;
+
+    private static float pitchToCursor(float pitch) {
+        pitch = Math.max(PIT_MIN, Math.min(PIT_MAX, pitch));
+        return (float) (Math.log(pitch / PIT_MIN) / Math.log(PIT_RATIO));
+    }
+
+    private static float cursorToPitch(float cursor) {
+        cursor = Math.max(0f, Math.min(1f, cursor));
+        return (float) (PIT_MIN * Math.pow(PIT_RATIO, cursor));
+    }
+
+    /** 曲目时长文本（未知显示占位符，避免各行宽度闪跳） */
+    private static String trackTimeText(MusicTrack t) {
         float len = MusicPlayer.trackLengthOf(t);
-        if (len > 0f) {
-            int total = (int) len;
-            sb.append((total / 60) + ":" + (total % 60 < 10 ? "0" : "") + (total % 60));
-        } else {
-            sb.append("--:--");
-        }
+        if (len <= 0f) return "--:--";
+        int total = (int) len;
+        return (total / 60) + ":" + (total % 60 < 10 ? "0" : "") + (total % 60);
+    }
+
+    /** 曲目文件大小文本（未知显示占位符） */
+    private static String trackSizeText(MusicTrack t) {
         long size = MusicPlayer.trackSizeOf(t);
-        if (size > 0f) {
-            sb.append("  ");
-            if (size > 1048576) sb.append(String.format("%.1fM", size / 1048576.0));
-            else if (size > 1024) sb.append(String.format("%.0fK", size / 1024.0));
-            else sb.append(size).append("B");
-        }
-        return sb.toString();
+        if (size <= 0) return "--";
+        if (size > 1048576) return String.format("%.1fM", size / 1048576.0);
+        if (size > 1024) return String.format("%.0fK", size / 1024.0);
+        return size + "B";
+    }
+
+    /** 曲目信息标签：时长 + 文件大小（导入结果对话框合并成一行展示用） */
+    private static String trackInfoLabel(MusicTrack t) {
+        String time = trackTimeText(t);
+        String size = trackSizeText(t);
+        return size.equals("--") ? time : time + "  " + size;
     }
 }
