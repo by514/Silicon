@@ -344,7 +344,11 @@ public class MusicPlayer {
             if (localVoiceId >= 0) pausedPosition = currentTime();
         } else if (!gp && prevGamePaused) {
             pausedByGame = false;
-            if (localVoiceId >= 0 && pausedPosition > 0f) seek(pausedPosition);
+            if (localVoiceId >= 0 && pausedPosition > 0f) {
+                // 同样走延迟 seek：暂停期间声源可能已自然播完被 autoAdvance 重建（新声源立刻 seek 会原生崩溃）
+                deferSeek(pausedPosition);
+                pausedPosition = 0f;
+            }
         }
         prevGamePaused = gp;
         tickLocal();
@@ -685,11 +689,17 @@ public class MusicPlayer {
                 // 恢复播放通常要 seek 到暂停位置，但刚创建的新流式声源可能尚未就绪；
                 // 实测此时立刻 idSeek 会在原生 arc64.dll 崩溃（Soloud 内部锁断言，见 hs_err_pid*）。
                 // 推迟到声源确认存活后应用（tickLocal 内 pendingResumeSeek 处理）。
-                float len = trackLength();
-                pendingResumeSeek = Math.min(seekTo, len > 0f ? Math.max(0f, len - 0.5f) : seekTo);
+                deferSeek(seekTo);
             }
             if (playing) bcast(seekTo > 0.05f ? "resume" : "play");
         }
+    }
+
+    /** 记录待应用的恢复进度并夹取在曲末前 0.5s 内（秒）；由 tickLocal 在声源确认存活后应用。
+     *  统一通道：resume() 与游戏暂停恢复都用它，避免对"刚建/可能重建"的新声源同步 idSeek 触发原生崩溃 */
+    private static void deferSeek(float seconds) {
+        float len = trackLength();
+        pendingResumeSeek = Math.min(seconds, len > 0f ? Math.max(0f, len - 0.5f) : seconds);
     }
 
     public static void stopLocal() {
