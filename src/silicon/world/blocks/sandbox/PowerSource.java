@@ -33,11 +33,12 @@ public class PowerSource extends mindustry.world.blocks.sandbox.PowerSource {
          */
         @Override
         public float getPowerProduction() {
+            if (power == null || power.graph == null) return 0f;
             int i = 0;
-            // Check if connected to any PowerVoid blocks
-            for (Building e : power.graph.all.items) {
-                if (e != null && e.block instanceof PowerVoid) return 0f;
-                if (e != null && e.block instanceof PowerSource) {
+            // 遍历图内实际建筑（Seq 迭代，避免原始数组容量槽位）
+            for (Building e : power.graph.all) {
+                if (e.block instanceof PowerVoid) return 0f;
+                if (e.block instanceof PowerSource) {
                     i++;
                 }
             }

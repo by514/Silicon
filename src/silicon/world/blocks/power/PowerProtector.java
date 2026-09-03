@@ -17,7 +17,10 @@ import arc.scene.ui.layout.Table;
 import arc.util.*;
 import arc.util.io.Reads;
 import arc.util.io.Writes;
+import arc.struct.ObjectMap;
+import arc.struct.Seq;
 import mindustry.core.UI;
+import mindustry.game.Team;
 import mindustry.gen.Building;
 import mindustry.gen.Groups;
 import mindustry.gen.Tex;
@@ -89,6 +92,28 @@ public class PowerProtector extends PowerGenerator {
 
     // 拆除提示节流（避免 validBreak 轮询时刷屏）
     private static float lastBreakToast = Float.NEGATIVE_INFINITY;
+
+    // #39/PowerProtector 性能：按队缓存保护器列表，只在建筑增删/重叠变化时重建，
+    // 避免每帧每台都遍历全局 Groups.build（O(N×M)）。运行时仍逐台校验当前电网状态。
+    private static final ObjectMap<Team, Seq<Building>> protectorCache = new ObjectMap<>();
+    private static boolean protectorDirty = true;
+
+    private static void markProtectorDirty() {
+        protectorDirty = true;
+    }
+
+    private static Seq<Building> protectors(Team team) {
+        if (protectorDirty) {
+            protectorDirty = false;
+            protectorCache.clear();
+            for (Building b : Groups.build) {
+                if (b instanceof PowerProtectorBuild) {
+                    protectorCache.get(b.team, Seq::new).add(b);
+                }
+            }
+        }
+        return protectorCache.get(team, Seq.with());
+    }
 
     public PowerProtector(String name) {
         super(name);
@@ -208,6 +233,19 @@ public class PowerProtector extends PowerGenerator {
         // 电力不足警报音（仅随提示横幅播放一次）
         private Sound warnSfx;
 
+        // 任何保护器加入/离开/重叠变化都要使按队缓存失效
+        @Override
+        public void onProximityAdded() {
+            super.onProximityAdded();
+            markProtectorDirty();
+        }
+
+        @Override
+        public void onRemoved() {
+            super.onRemoved();
+            markProtectorDirty();
+        }
+
         @Override
         public void updateTile() {
             // 1. 同步引用：电网共享（模式/冲突/提示）+ 全队时间池
@@ -320,8 +358,9 @@ public class PowerProtector extends PowerGenerator {
         private void syncTeamState() {
             teamMaster = null;
             PowerProtectorBuild master = null;
-            for (Building b : Groups.build) {
-                if (b instanceof PowerProtectorBuild ppb && ppb.team == team
+            // 走按队缓存（仅在建筑增删时重建），替代每帧遍历全图 Groups.build
+            for (Building b : protectors(team)) {
+                if (b instanceof PowerProtectorBuild ppb
                         && ppb.power != null && ppb.power.graph != null) {
                     if (master == null || b.id < master.id) {
                         master = ppb;
@@ -344,8 +383,8 @@ public class PowerProtector extends PowerGenerator {
             float activeCnt = 0f;
             boolean anyDebt = false;
 
-            for (Building b : Groups.build) {
-                if (!(b instanceof PowerProtectorBuild ppb) || ppb.team != team) continue;
+            for (Building b : protectors(team)) {
+                if (!(b instanceof PowerProtectorBuild ppb)) continue;
 
                 if (ppb.power != null && ppb.power.graph != null && ppb.shared != null && ppb.shared.mode == Mode.Protecting) {
                     activeCnt += 1f;
