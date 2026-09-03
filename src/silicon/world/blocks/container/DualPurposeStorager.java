@@ -4,6 +4,7 @@ import arc.Core;
 import arc.graphics.Color;
 import arc.graphics.g2d.Draw;
 import arc.graphics.g2d.TextureRegion;
+import mindustry.Vars;
 import mindustry.gen.Building;
 import mindustry.type.Liquid;
 import mindustry.world.blocks.liquid.LiquidBlock;
@@ -123,7 +124,8 @@ public class DualPurposeStorager extends StorageBlock {
 
             // 与原版 LiquidRouter 完全一致：drawTiledFrames 用 fluidFrames 动画帧画出条纹流动液面，
             // alpha 直接用填充比例（液体多则浓、少则淡），不额外做保底，保证与原版渐变一致。
-            if (liquids.currentAmount() > LIQUID_THRESHOLD) {
+            // 依赖 Vars.renderer.fluidFrames（仅客户端可用），null 时跳过，防服务器端渲染崩溃。
+            if (liquids.currentAmount() > LIQUID_THRESHOLD && Vars.renderer != null) {
                 Liquid liq = liquids.current();
                 if (liq != null) {
                     LiquidBlock.drawTiledFrames(size, x, y, DualPurposeStorager.this.liquidPadding, liq,
