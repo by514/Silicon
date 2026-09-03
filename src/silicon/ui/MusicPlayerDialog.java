@@ -86,8 +86,9 @@ public class MusicPlayerDialog extends BaseDialog {
                 info.row();
                 nameLbl[0] = new MusicBar.MarqueeLabel(nowPlayingLabel(), Styles.outlineLabel);
                 nameLbl[0].setColor(MusicPlayer.isPlaying() ? Color.white : Color.lightGray);
-                // 自适应宽度：占满「现在播放」面板剩余空间（maxPref 是滚动触发的上限，文本超宽才开始循环显示）
-                nameLbl[0].maxPref = Scl.scl(520f);
+                // 自适应宽度：占满「现在播放」面板剩余空间；maxPref 是滚动触发的上限（需 > 实际可用宽，
+                // 否则 growX 后 this.width>pref 永不滚动），文本真正超过可用宽才开始循环显示
+                nameLbl[0].maxPref = Scl.scl(900f);
                 info.add(nameLbl[0]).growX().padRight(6f);
             }).growX();
             // 每帧刷新状态与曲名（悬浮条/自动推进切换曲目时这里也跟着变）；仅内容变化时 setText 避免反复重排

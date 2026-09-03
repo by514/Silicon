@@ -300,6 +300,10 @@ public class GeneratorPump extends LiquidBlock {
 
         @Override
         public void draw(){
+            Liquid liq = liquids.current();
+            if(liq != null && liquids.currentAmount() > 0.001f){
+                LiquidBlock.drawTiledFrames(size, x, y, 0f, liq, liquids.currentAmount() / liquidCapacity);
+            }
             drawer.draw(this);
         }
 
