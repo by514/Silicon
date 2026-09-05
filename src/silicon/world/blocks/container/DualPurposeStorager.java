@@ -25,8 +25,6 @@ public class DualPurposeStorager extends StorageBlock {
     public float liquidPadding = 0f;
     /** 储存罐底座贴图 */
     public TextureRegion bottomRegion;
-    /** 流动液面贴图 */
-    public TextureRegion liquidRegion;
     /** 储存罐顶盖贴图（中心挖空，露出液体） */
     public TextureRegion topRegion;
 
@@ -50,17 +48,13 @@ public class DualPurposeStorager extends StorageBlock {
     @Override
     public void load() {
         super.load();
-        // 按 mod 约定加载储罐三贴图；缺失时回退到主贴图并打印警告
+        // 按 mod 约定加载储罐两静态层贴图（中间液体层用原版 drawTiledFrames 过程绘制，无需贴图文件）；
+        // 缺失时回退到主贴图并打印警告
         this.bottomRegion = Core.atlas.find(name + "-bottom");
-        this.liquidRegion = Core.atlas.find(name + "-liquid");
         this.topRegion = Core.atlas.find(name + "-top");
         if (!bottomRegion.found()) {
             SiliconLog.warn("DualPurposeStorager '{}' missing -bottom texture, fallback to region", name);
             bottomRegion = region;
-        }
-        if (!liquidRegion.found()) {
-            SiliconLog.warn("DualPurposeStorager '{}' missing -liquid texture, fallback to region", name);
-            liquidRegion = region;
         }
         if (!topRegion.found()) {
             SiliconLog.warn("DualPurposeStorager '{}' missing -top texture, fallback to region", name);
