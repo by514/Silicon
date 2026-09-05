@@ -1047,15 +1047,17 @@ addListener(new InputListener() {
                         previewBottom = boxBaseTop + MARGIN;
                         placeVisByTop(vis, top);
                     } else {
-                        // 两框之间：ins..n-1 下移，使灰色框居中于扩大的间隙
+                        // 两框之间：把下方各框整体下移，把 40 间隙扩到能容纳按钮；灰色框居中于扩大的间隙。
+                        // stage y 向上为增：top 减 shift 才是「向下推」。曾误写成 +=，导致下方白框反而
+                        // 上移 68 与上方白框交错，且 hint 被算到 upperBottom 上方与白框大面积重叠。
                         int ui = rs.slotBoxes.indexOf(vis.get(ins - 1));
                         int li = rs.slotBoxes.indexOf(vis.get(ins));
                         float upperBottom = top[ins - 1] - rs.slotHeight(ui);
                         float shift = BTN_H + MARGIN - GAP;
                         for (int j = ins; j < n; j++) {
-                            top[j] += shift;
+                            top[j] -= shift;
                         }
-                        previewBottom = upperBottom + (GAP + shift - BTN_H) / 2f;
+                        previewBottom = upperBottom - (GAP + shift - BTN_H) / 2f;
                         placeVisByTop(vis, top);
                     }
                     showHintBox(fixedHintCenterX(), previewBottom, BTN_H, buttonWidth());
