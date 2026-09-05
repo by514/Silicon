@@ -53,9 +53,9 @@ public class UniversalJunctionDialog extends BaseDialog {
     /** 方向按钮尺寸基准值：红框与白框内一致，保证按钮大小不变 */
     private static final float BTN_W = 140f;
     private static final float BTN_H = 100f;
-    /** 方向按钮配色：亮金细边框 + 深琥珀内面 + 白字，构成金属徽章效果 */
-    private static final Color BTN_BORDER = Color.valueOf("ffcf4d");
-    private static final Color BTN_FACE = Color.valueOf("7a5c16");
+    /** 方向按钮配色：亮金内面（不透明）+ 深棕金边框，鲜艳醒目 */
+    private static final Color BTN_BORDER = Color.valueOf("8a5a00");
+    private static final Color BTN_FACE = Color.valueOf("ffc107");
     /** 整框拖拽时灰色落点占位框的高度（基准值） */
     private static final float PLACE_H = 60f;
     /** 按钮拖到空白处时「新建槽位」长条灰框的高度：比按钮(y=52)高，避免内嵌按钮框与大框上下边缘重叠 */
@@ -565,7 +565,7 @@ public class UniversalJunctionDialog extends BaseDialog {
                             btn.setColor(BTN_BORDER);
                             btn.margin(0f);
                             btn.touchable = Touchable.disabled;
-                            btn.table(Tex.whiteui, t -> {
+                            btn.table(Tex.whitePane, t -> {
                                 t.color.set(BTN_FACE);
                                 t.margin(10f);
                                 t.touchable = Touchable.disabled;
@@ -727,7 +727,7 @@ public class UniversalJunctionDialog extends BaseDialog {
             margin(0f);
             touchable = Touchable.enabled;
 
-            table(Tex.whiteui, t -> {
+            table(Tex.whitePane, t -> {
                 t.color.set(BTN_FACE);
                 t.addListener(new HandCursorListener());
                 t.margin(10f);
@@ -823,7 +823,10 @@ addListener(new InputListener() {
                     // 若来源框已被隐藏成空框（srcSlotBox，唯一按钮被拖出），则不再把它当框内目标，
                     // 其区域按空白处理 → 落在其上下时应显示新建槽位预览而非灰掉。
                     RegionState.SlotBox srcBox = currentSrcBox();
-                    if (srcBox != null && srcBox != srcSlotBox && inRect(srcBox, sx, sy)) {
+                    if (srcBox != null && srcBox != srcSlotBox && inBaseBox(srcBoxIdx, sx, sy)) {
+                        // 先还原白框/按钮基准几何：防止上一帧的空白区重排位移残留（框被推移而按钮画回原位）
+                        // 造成框与按钮交错、灰框位置错乱、边界处频繁闪动。
+                        restoreBoxPristine();
                         removeHint(); // 清除其它白框占位并复原布局
                         drawInBoxReflow(srcBox, baseInsertForSource(sy));
                         return;
@@ -848,15 +851,31 @@ addListener(new InputListener() {
                     resetInBoxReflow();
                 }
 
-                /** 命中测试：指针落在哪个白框内（跳过来源框，避免重建来源框把持触摸焦点的按钮 detach 造成提前放置） */
+                /** 命中测试：指针落在哪个白框内（跳过来源框，避免重建来源框把持触摸焦点的按钮 detach 造成提前放置）。
+                 * 用「基准堆叠几何」（boxBaseTop 向下推算）而非实时位置判定：空白区预览的重排会实时推移白框，
+                 * 若按实时位置判定，被移进指针下的白框会把模式拉成框内占位，布局恢复后又弹回空白模式——来回抖动。
+                 * 基准判定与松手时的落点口径一致，且不随预览位移反馈变化。 */
                 private RegionState.SlotBox findTargetSlot(float sx, float sy) {
                     for (int i = 0; i < rs.slotBoxes.size; i++) {
                         RegionState.SlotBox box = rs.slotBoxes.get(i);
                         if (box == srcSlotBox) continue; // 跳过隐藏的来源框（拖出唯一按钮时）
                         if (rs.slotContents.get(i).contains(Direction.this)) continue; // 跳过当前按钮所在框（多按钮框）
-                        if (inRect(box, sx, sy)) return box;
+                        if (inBaseBox(i, sx, sy)) return box;
                     }
                     return null;
+                }
+
+                /** 按基准堆叠几何判定指针是否落在框 i 内（不随预览位移变化） */
+                private boolean inBaseBox(int i, float sx, float sy) {
+                    if (i < 0 || i >= rs.slotBoxes.size) return false;
+                    float y = boxBaseTop;
+                    for (int k = 0; k < i; k++) {
+                        y -= rs.slotHeight(k) + 40f;
+                    }
+                    RegionState.SlotBox box = rs.slotBoxes.get(i);
+                    Vec2 v = box.localToStageCoordinates(Tmp.v1.set(0f, 0f));
+                    return sx >= v.x && sx <= v.x + box.getWidth()
+                            && sy >= y - rs.slotHeight(i) && sy <= y;
                 }
 
                 /** 当前被拖按钮所在的来源框（任意按钮数量），null 表示不在任何白框内 */
@@ -1126,7 +1145,7 @@ addListener(new InputListener() {
             ghost.background(Tex.whitePane);
             ghost.setColor(BTN_BORDER);
             ghost.margin(0f);
-            ghost.table(Tex.whiteui, t -> {
+            ghost.table(Tex.whitePane, t -> {
                 t.color.set(BTN_FACE);
                 t.margin(10f);
                 t.touchable = Touchable.disabled;
