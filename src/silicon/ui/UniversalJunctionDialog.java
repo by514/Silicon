@@ -53,9 +53,9 @@ public class UniversalJunctionDialog extends BaseDialog {
     /** 方向按钮尺寸基准值：红框与白框内一致，保证按钮大小不变 */
     private static final float BTN_W = 140f;
     private static final float BTN_H = 100f;
-    /** 方向按钮配色：外框深金 + 内面亮金，构成立体压边 */
-    private static final Color BTN_BORDER = Color.valueOf("9a7414");
-    private static final Color BTN_FACE = Color.valueOf("ffd75e");
+    /** 方向按钮配色：亮金细边框 + 深琥珀内面 + 白字，构成金属徽章效果 */
+    private static final Color BTN_BORDER = Color.valueOf("ffcf4d");
+    private static final Color BTN_FACE = Color.valueOf("7a5c16");
     /** 整框拖拽时灰色落点占位框的高度（基准值） */
     private static final float PLACE_H = 60f;
     /** 按钮拖到空白处时「新建槽位」长条灰框的高度：比按钮(y=52)高，避免内嵌按钮框与大框上下边缘重叠 */
@@ -567,10 +567,11 @@ public class UniversalJunctionDialog extends BaseDialog {
                             btn.touchable = Touchable.disabled;
                             btn.table(Tex.whiteui, t -> {
                                 t.color.set(BTN_FACE);
-                                t.margin(12f);
+                                t.margin(10f);
                                 t.touchable = Touchable.disabled;
-                                t.add("@universal-junction.dir" + d.dir).style(Styles.outlineLabel).color(Color.white).growX().center();
-                            }).grow().pad(4f);
+                                t.add("@universal-junction.dir" + d.dir).style(Styles.outlineLabel).color(Color.white)
+                                        .grow().labelAlign(Align.center);
+                            }).grow().pad(2f);
                             g.add(btn).growX().height(BTN_H).pad(4f).row();
                         }
 
@@ -729,10 +730,11 @@ public class UniversalJunctionDialog extends BaseDialog {
             table(Tex.whiteui, t -> {
                 t.color.set(BTN_FACE);
                 t.addListener(new HandCursorListener());
-                t.margin(12f);
+                t.margin(10f);
                 t.touchable = Touchable.enabled;
-                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).name("statement-name").color(Color.white).growX().center();
-            }).grow().pad(4f);
+                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).name("statement-name")
+                        .color(Color.white).grow().labelAlign(Align.center);
+            }).grow().pad(2f);
 
             row();
 
@@ -1126,10 +1128,11 @@ addListener(new InputListener() {
             ghost.margin(0f);
             ghost.table(Tex.whiteui, t -> {
                 t.color.set(BTN_FACE);
-                t.margin(12f);
+                t.margin(10f);
                 t.touchable = Touchable.disabled;
-                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).color(Color.white).growX().center();
-            }).grow().pad(4f);
+                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).color(Color.white)
+                        .grow().labelAlign(Align.center);
+            }).grow().pad(2f);
             ghost.setSize(getWidth(), getHeight());
             ghost.touchable = Touchable.disabled;
             ghost.setPosition(event.stageX - getWidth() / 2f, event.stageY - getHeight() / 2f);
