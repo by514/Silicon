@@ -52,7 +52,10 @@ public class UniversalJunctionDialog extends BaseDialog {
     private static final float RED_H = 140f;
     /** 方向按钮尺寸基准值：红框与白框内一致，保证按钮大小不变 */
     private static final float BTN_W = 140f;
-    private static final float BTN_H = 52f;
+    private static final float BTN_H = 100f;
+    /** 方向按钮配色：外框深金 + 内面亮金，构成立体压边 */
+    private static final Color BTN_BORDER = Color.valueOf("9a7414");
+    private static final Color BTN_FACE = Color.valueOf("ffd75e");
     /** 整框拖拽时灰色落点占位框的高度（基准值） */
     private static final float PLACE_H = 60f;
     /** 按钮拖到空白处时「新建槽位」长条灰框的高度：比按钮(y=52)高，避免内嵌按钮框与大框上下边缘重叠 */
@@ -114,13 +117,19 @@ public class UniversalJunctionDialog extends BaseDialog {
                     column.add(redBox).growX().padTop(6f).row();
 
                     // 统一按建筑当前权重还原布局：w>0 → 放入对应白色槽位，w==0 → 放入红框。
-                    // 不再区分「未配置」分支：默认全 2（=均分）会自然显示在 2 号白色槽位，
-                    // 而不是误导性地放进红框（红框语义为优先级 0 = 不输出）。
+                    // 刚放置（权重仍为默认值 2 均分）时视为「未配置」：全部放入红框，与用户直觉一致，
+                    // 红框语义为优先级 0 = 不输出。
                     // 仅还原显示：不改写 weights，也不在此触发 configure，避免「打开面板即重置路由瞬态」。
+                    boolean freshDefault = true;
+                    for (int out = 0; out < 4; out++) {
+                        if (build.weights[input][out] != 2) { freshDefault = false; break; }
+                    }
                     for (int out = 0; out < 4; out++) {
                         Direction d = new Direction(rs, out);
                         int w = build.weights[input][out];
-                        if (w > 0) {
+                        if (freshDefault) {
+                            rs.redButtons.add(d);
+                        } else if (w > 0) {
                             rs.placeInSlotByWeight(d, w);
                         } else {
                             rs.redButtons.add(d);
@@ -210,7 +219,7 @@ public class UniversalJunctionDialog extends BaseDialog {
         /** 重建红框布局：按钮竖向排列，高度随按钮数量自动伸缩 */
         void rebuildRed() {
             redBox.clearChildren();
-            redBox.margin(0f).marginLeft(8f).marginRight(8f);
+            redBox.margin(0f).marginLeft(8f).marginRight(8f).marginTop(12f).marginBottom(12f);
             for (int i = 0; i < redButtons.size; i++) {
                 redBox.add(redButtons.get(i)).growX().height(BTN_H).pad(4f).row();
             }
@@ -222,6 +231,8 @@ public class UniversalJunctionDialog extends BaseDialog {
             slotLayer.clearChildren();
             for (int i = 0; i < slotBoxes.size; i++) {
                 int n = slotContents.get(i).size;
+                // 若该框正显示灰色占位（拖拽悬停中），多算一个按钮高度使白框实时扩大
+                if (slotBoxes.get(i).previewInsert >= 0) n++;
                 float h = n * (BTN_H + 8f) + 14f;
                 slotLayer.add(slotBoxes.get(i)).growX().height(h).padBottom(40f).row();
             }
@@ -319,6 +330,24 @@ public class UniversalJunctionDialog extends BaseDialog {
             return n * (BTN_H + 8f) + 14f;
         }
 
+        /** 槽 i 高度（若正显示灰色占位则多算一个按钮高度，与 rebuildSlots 一致） */
+        float slotHeightWithPreview(int i) {
+            int n = slotContents.get(i).size;
+            if (slotBoxes.get(i).previewInsert >= 0) n++;
+            return n * (BTN_H + 8f) + 14f;
+        }
+
+        /**
+         * 只调整单个白框在槽位层中的高度（灰色占位增/删时让白框实时扩大/复原）。
+         * 只改对应 Cell 的高度并触发重排，不 clearChildren slotLayer——
+         * 避免把仍持有触摸焦点的来源白框从场景中 detach，从而引发 arc 的合成 touchUp
+         * 把松手前的拖拽提前放置（「一离开白框就放置」）或 NPE。
+         */
+        void setSlotHeight(int i) {
+            slotLayer.getCell(slotBoxes.get(i)).height(slotHeightWithPreview(i));
+            slotLayer.invalidateHierarchy();
+        }
+
         /** 基准布局下最顶白框顶边的 stage y：取 slotBoxes[0] 当前底边 + 自身高度。
          * 整框拖动中调用前必须先用 applyPristine 恢复基准布局（此时与实际布局一致）。 */
         float pristineTopOfStack() {
@@ -407,7 +436,7 @@ public class UniversalJunctionDialog extends BaseDialog {
         class SlotBox extends Table {
             /** 按钮区：只有按钮会被重排 */
             final Table content = new Table();
-            /** 拖拽按钮悬停本框时，灰色占位按钮的插入位置（-1 表示不显示），重建按钮区时据此插入占位 */
+            /** 拖拽悬停本框时，灰色占位按钮的插入位置（-1 表示不显示占位） */
             int previewInsert = -1;
 
             SlotBox(RegionState rs) {
@@ -533,15 +562,15 @@ public class UniversalJunctionDialog extends BaseDialog {
                                 }
                             };
                             btn.background(Tex.whitePane);
-                            btn.setColor(Color.gold);
+                            btn.setColor(BTN_BORDER);
                             btn.margin(0f);
                             btn.touchable = Touchable.disabled;
                             btn.table(Tex.whiteui, t -> {
-                                t.color.set(Color.gold);
-                                t.margin(6f);
+                                t.color.set(BTN_FACE);
+                                t.margin(12f);
                                 t.touchable = Touchable.disabled;
-                                t.add("@universal-junction.dir" + d.dir).style(Styles.outlineLabel).color(Color.gold).padRight(8f);
-                            }).growX().height(38f);
+                                t.add("@universal-junction.dir" + d.dir).style(Styles.outlineLabel).color(Color.white).growX().center();
+                            }).grow().pad(4f);
                             g.add(btn).growX().height(BTN_H).pad(4f).row();
                         }
 
@@ -638,6 +667,9 @@ public class UniversalJunctionDialog extends BaseDialog {
 
             /** 重建按钮区：按钮竖向排列，左右留小边距使按钮比白框略短；若 previewInsert>=0 则在对应位置插入灰色占位按钮 */
             void rebuildButtons(Seq<Direction> buttons) {
+                // 重建前先取消本框及其按钮可能持有的触摸焦点，避免 detach 元素后下一事件派发到已离树的节点
+                Core.scene.cancelTouchFocus(this);
+                for (int i = 0; i < buttons.size; i++) Core.scene.cancelTouchFocus(buttons.get(i));
                 content.clearChildren();
                 content.margin(0f).marginLeft(8f).marginRight(8f);
                 int placed = 0;
@@ -677,22 +709,30 @@ public class UniversalJunctionDialog extends BaseDialog {
         Table ghost; // 拖拽中的浮动影子
         RegionState.SlotBox srcSlotBox; // 拖出唯一按钮时被隐藏的来源白框（松手时恢复）
 
+        // —— 拖动预览用的基准几何快照（dragStart 时采集，仅 setPosition 手绘，不增删布局树）——
+        float boxBaseTop;        // 基准布局下最顶白框顶边的 stage y
+        boolean boxReflowActive; // 是否已手动重排过白框（空白/新建槽位预览）
+        Vec2 slotBase;           // slotLayer 原点(stage)坐标，用于把 stage 几何转局部置位
+        int srcBoxIdx = -1;      // 来源白框索引（拖拽开始时按钮所在框），-1=不在框内
+        boolean inBoxReflowActive; // 是否正在对来源框内按钮做手动重排
+        float[] srcBtnBaseBottoms; // 来源框内各按钮底边 stage y 的快照（拖拽开始时）
+
         public Direction(RegionState rs, int dir) {
             this.rs = rs;
             this.dir = dir;
 
             background(Tex.whitePane);
-            setColor(Color.gold);
+            setColor(BTN_BORDER);
             margin(0f);
             touchable = Touchable.enabled;
 
             table(Tex.whiteui, t -> {
-                t.color.set(color);
+                t.color.set(BTN_FACE);
                 t.addListener(new HandCursorListener());
-                t.margin(6f);
+                t.margin(12f);
                 t.touchable = Touchable.enabled;
-                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).name("statement-name").color(color).padRight(8f);
-            }).growX().height(38f);
+                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).name("statement-name").color(Color.white).growX().center();
+            }).grow().pad(4f);
 
             row();
 
@@ -727,6 +767,10 @@ addListener(new InputListener() {
                         Direction.this.srcSlotBox = null;
                     }
 
+                    // 还原一切预览重排（白框/框内按钮回基准位），保证后续落点判断基于自然几何
+                    restoreBoxPristine();
+                    resetInBoxReflow();
+
                     // 判定落点
                     RegionState.SlotBox targetSlot = findTargetSlot(sx, sy);
                     boolean inRed = inRect(rs.redBox, sx, sy);
@@ -745,41 +789,93 @@ addListener(new InputListener() {
                         }
                     } else if (inRed) {
                         rs.placeInRed(Direction.this);
-                    } else if (rs.slotBoxes.size < MAX_SLOTS) {
-                        rs.createSlotFor(Direction.this, sx, sy);
                     } else {
-                        int cur = rs.locate(Direction.this);
-                        if (cur >= 0) rs.placeInSlot(Direction.this, cur);
-                        else rs.placeInRed(Direction.this);
+                        // 松手仍落在来源框内：留在原框、按落点排序，不新建槽位（避免被当成放框外）
+                        RegionState.SlotBox srcBox = currentSrcBox();
+                        if (srcBox != null && inRect(srcBox, sx, sy)) {
+                            int srcIdx = rs.slotBoxes.indexOf(srcBox);
+                            int btnInsert = baseInsertForSource(sy);
+                            rs.placeIntoSlot(Direction.this, srcIdx, btnInsert);
+                        } else if (rs.slotBoxes.size < MAX_SLOTS) {
+                            rs.createSlotFor(Direction.this, sx, sy);
+                        } else {
+                            int cur = rs.locate(Direction.this);
+                            if (cur >= 0) rs.placeInSlot(Direction.this, cur);
+                            else rs.placeInRed(Direction.this);
+                        }
                     }
+                    resetDragState();
                 }
 
-                /** 主拖拽预览入口：判定落点目标并绘制灰色提示框 */
+                /** 主拖拽预览入口：判定落点目标并绘制灰色提示框（按钮等大 + 推开相邻占位） */
                 private void updateDragPreview(float sx, float sy) {
                     RegionState.SlotBox targetSlot = findTargetSlot(sx, sy);
                     if (targetSlot != null) {
-                        // 悬停在（非来源）白框上方 → 在该框内按钮序列位置放置灰色占位（实时改变白框大小）
+                        // 悬停在（非来源）白框上方 → 在该框内按钮序列位置插入灰色占位（实时改变白框大小）
                         int btnInsert = computeButtonInsert(targetSlot, sy);
+                        leaveReflowStates();
                         showBoxPlaceholder(targetSlot, btnInsert);
+                        return;
+                    }
+                    // 未落在其它白框：若仍落在来源框内（多按钮框内移动）→ 手动重排框内按钮并绘制按钮等大占位。
+                    // 若来源框已被隐藏成空框（srcSlotBox，唯一按钮被拖出），则不再把它当框内目标，
+                    // 其区域按空白处理 → 落在其上下时应显示新建槽位预览而非灰掉。
+                    RegionState.SlotBox srcBox = currentSrcBox();
+                    if (srcBox != null && srcBox != srcSlotBox && inRect(srcBox, sx, sy)) {
+                        removeHint(); // 清除其它白框占位并复原布局
+                        drawInBoxReflow(srcBox, baseInsertForSource(sy));
                         return;
                     }
                     boolean inRed = inRect(rs.redBox, sx, sy);
                     if (!inRed) {
-                        // 空白处 → 在槽位序列位置绘制灰色占位（新建槽位/移动排序）
-                        int slotInsert = rs.insertIndexFor(sx, sy);
-                        drawSlotLevelPreview(slotInsert);
+                        // 离开所有白框/红框 → 清理框内/白框占位与重排，绘制「新建槽位」按钮等大占位并推开相邻白框
+                        removeHint();
+                        resetInBoxReflow();
+                        drawBoxReflowPreview(sx, sy);
                         return;
                     }
+                    // 落回红框：还原所有重排与占位
+                    restoreBoxPristine();
+                    resetInBoxReflow();
                     removeHint();
                 }
 
-                /** 命中测试：指针落在哪个白框内 */
+                /** 离开框内重排/白框重排任一状态时统一还原（进入白框占位或落下前调用） */
+                private void leaveReflowStates() {
+                    restoreBoxPristine();
+                    resetInBoxReflow();
+                }
+
+                /** 命中测试：指针落在哪个白框内（跳过来源框，避免重建来源框把持触摸焦点的按钮 detach 造成提前放置） */
                 private RegionState.SlotBox findTargetSlot(float sx, float sy) {
-                    for (RegionState.SlotBox box : rs.slotBoxes) {
-                        if (box == srcSlotBox) continue; // 跳过来源框
+                    for (int i = 0; i < rs.slotBoxes.size; i++) {
+                        RegionState.SlotBox box = rs.slotBoxes.get(i);
+                        if (box == srcSlotBox) continue; // 跳过隐藏的来源框（拖出唯一按钮时）
+                        if (rs.slotContents.get(i).contains(Direction.this)) continue; // 跳过当前按钮所在框（多按钮框）
                         if (inRect(box, sx, sy)) return box;
                     }
                     return null;
+                }
+
+                /** 当前被拖按钮所在的来源框（任意按钮数量），null 表示不在任何白框内 */
+                private RegionState.SlotBox currentSrcBox() {
+                    for (int i = 0; i < rs.slotBoxes.size; i++) {
+                        if (rs.slotContents.get(i).contains(Direction.this)) return rs.slotBoxes.get(i);
+                    }
+                    return null;
+                }
+
+                /** 基于「来源框基准布局」计算插入索引（使用 dragStart 快照的底边，不受框内重排位移影响，避免反馈抖动） */
+                private int baseInsertForSource(float sy) {
+                    if (srcBoxIdx < 0 || srcBoxIdx >= rs.slotContents.size) return 0;
+                    Seq<Direction> contents = rs.slotContents.get(srcBoxIdx);
+                    for (int i = 0; i < contents.size; i++) {
+                        float bottom = (i < srcBtnBaseBottoms.length) ? srcBtnBaseBottoms[i]
+                                : contents.get(i).localToStageCoordinates(Tmp.v1.set(0f, 0f)).y;
+                        float centerY = bottom + BTN_H / 2f;
+                        if (sy > centerY) return i;
+                    }
+                    return contents.size;
                 }
 
                 /** 计算按钮应插入目标白框内按钮序列的哪个位置（竖向比较中心 y） */
@@ -797,68 +893,223 @@ addListener(new InputListener() {
                     return contents.size;
                 }
 
-                /** 在目标白框内放置灰色占位按钮：重建该框按钮区（含占位），使白框实时改变大小并排序 */
+                /** 在目标白框内放置灰色占位按钮：重建该框按钮区（含占位），使白框实时扩大并让占位与按钮一起排序。
+                 * 只改目标框内容与高度，绝不 clearChildren slotLayer，避免把持触摸焦点的来源框 detach 造成提前放置。 */
                 private void showBoxPlaceholder(RegionState.SlotBox target, int insertIdx) {
                     if (target == srcSlotBox) { removeHint(); return; } // 同框不实时改布局
-                    if (target.previewInsert == insertIdx) return;
-                    // 清除其它框的占位
-                    for (RegionState.SlotBox b : rs.slotBoxes) b.previewInsert = -1;
+                    if (target.previewInsert == insertIdx) { clearRootHint(); return; }
+                    // 清除其它白框的占位（逐框复原，不整层重建）
+                    for (int i = 0; i < rs.slotBoxes.size; i++) {
+                        RegionState.SlotBox b = rs.slotBoxes.get(i);
+                        if (b == target) continue;
+                        if (b.previewInsert != -1) {
+                            b.previewInsert = -1;
+                            rs.rebuildSlotContents(i);
+                            rs.setSlotHeight(i);
+                        }
+                    }
+                    clearRootHint();
                     target.previewInsert = insertIdx;
                     int tIdx = rs.slotBoxes.indexOf(target);
                     if (tIdx >= 0) {
                         rs.rebuildSlotContents(tIdx);
-                        target.validate();
+                        rs.setSlotHeight(tIdx);
                     }
                 }
 
-                /** 在槽位序列的插入位置绘制按钮大小的灰色落点提示（用于新建槽位） */
-                private void drawSlotLevelPreview(int insertIdx) {
-                    float ph = BTN_H;
-                    float boxW = rs.column.getWidth() - 20f;
+                /** 框内排序预览：把来源框里的其它按钮手动重排进「去掉被拖按钮后 + 一个按钮等大占位」的槽位，
+                 * 占位与按钮一起排位、绝不重叠。不改布局树（避免 detach 把持触摸焦点的按钮）。
+                 * @param insertIdx 相对全部按钮（含被拖按钮）的插入索引 */
+                private void drawInBoxReflow(RegionState.SlotBox box, int insertIdx) {
+                    int idx = rs.slotBoxes.indexOf(box);
+                    Seq<Direction> contents = idx >= 0 ? rs.slotContents.get(idx) : null;
+                    if (contents == null || contents.size == 0) { removeHint(); return; }
+                    inBoxReflowActive = true;
+                    int n = contents.size;
+                    int srcBtn = contents.indexOf(Direction.this);
+                    // 去掉被拖按钮后，占位之前的可见按钮数 = previewRow
+                    int previewRow = insertIdx - (srcBtn < insertIdx ? 1 : 0);
+                    previewRow = Mathf.clamp(previewRow, 0, n - 1);
 
-                    // 计算槽位序列中插入位置的 y（与 insertIndexFor 同口径）
-                    float y;
-                    if (rs.slotBoxes.size == 0) {
-                        Vec2 cb = rs.column.localToStageCoordinates(Tmp.v1.set(0f, 0f));
-                        y = cb.y + rs.column.getHeight() / 2f;
-                    } else if (insertIdx >= rs.slotBoxes.size) {
-                        RegionState.SlotBox last = rs.slotBoxes.get(rs.slotBoxes.size - 1);
-                        Vec2 v = last.localToStageCoordinates(Tmp.v1.set(0f, 0f));
-                        y = v.y - 40f - ph / 2f;
-                    } else {
-                        RegionState.SlotBox at = rs.slotBoxes.get(insertIdx);
-                        Vec2 v = at.localToStageCoordinates(Tmp.v1.set(0f, at.getHeight()));
-                        y = v.y + 40f + ph / 2f;
+                    // 槽位顶取基准布局（dragStart 快照），避免被本次重排位移反馈影响
+                    float slotTop = (srcBtnBaseBottoms != null && srcBtnBaseBottoms.length > 0)
+                            ? srcBtnBaseBottoms[0] + BTN_H
+                            : contents.get(0).localToStageCoordinates(Tmp.v1.set(0f, contents.get(0).getHeight())).y;
+                    float pitch = BTN_H + 8f;
+
+                    // 其余（可见）按钮按原序填入除 previewRow 外的各槽位
+                    int v = 0;
+                    Table content = box.content;
+                    for (int row = 0; row < n; row++) {
+                        if (row == previewRow) {
+                            // 该行显示灰色占位（按钮等大，水平固定对齐按钮列，仅随鼠标上下移动）
+                            showHintBox(fixedHintCenterX(),
+                                    slotTop - (row + 1) * pitch, BTN_H, buttonWidth());
+                            continue;
+                        }
+                        // 找到下一个可见（非被拖）按钮
+                        while (v < n && contents.get(v) == Direction.this) v++;
+                        if (v >= n) break;
+                        Direction d = contents.get(v);
+                        Vec2 l = content.stageToLocalCoordinates(Tmp.v1.set(0f, slotTop - (row + 1) * pitch));
+                        d.setPosition(d.x, l.y);
+                        v++;
                     }
+                    // 说明：被拖按钮自身保持 visible=false（占位 row 显示灰色框），stay 原位
+                    if (ghost != null) ghost.toFront();
+                }
 
-                    Vec2 cb = rs.column.localToStageCoordinates(Tmp.v2.set(0f, 0f));
-                    float cx = cb.x + rs.column.getWidth() / 2f;
+                /** 白框序列的新建槽位预览：手动把各白框重排，在落点处推开一个「按钮等大」的槽位并绘制灰色占位。
+                 * 采用紧凑间距（只把落点处的 40 间隙扩到能容纳按钮），避免把相邻白框挤得太开。
+                 * 若来源框已被隐藏成空框（srcSlotBox），一律把它从可见序列与插入索引中剔除，
+                 * 与落下时的 pruneEmptySlots 口径一致，保证预览与真实落点吻合。 */
+                private void drawBoxReflowPreview(float sx, float sy) {
+                    // 可见白框 = 全部白框，剔除隐藏的空来源框 srcSlotBox
+                    int nAll = rs.slotBoxes.size;
+                    Seq<RegionState.SlotBox> vis = new Seq<>();
+                    for (int i = 0; i < nAll; i++) {
+                        RegionState.SlotBox b = rs.slotBoxes.get(i);
+                        if (b != srcSlotBox) vis.add(b);
+                    }
+                    int n = vis.size;
+                    if (n == 0) {
+                        Vec2 cb = rs.column.localToStageCoordinates(Tmp.v1.set(0f, 0f));
+                        float cx = cb.x + rs.column.getWidth() / 2f;
+                        float cy = cb.y + rs.column.getHeight() / 2f;
+                        showHintBox(cx, cy - BTN_H / 2f, BTN_H, buttonWidth());
+                        return;
+                    }
+                    boxReflowActive = true;
+                    float GAP = 40f;
+                    float MARGIN = 8f;
+                    // 各可见白框在「闭合堆叠」下的 top(stage)：从 boxBaseTop 起向下依次排布（剔除隐藏空框）
+                    float[] top = new float[n];
+                    float y = boxBaseTop;
+                    for (int j = 0; j < n; j++) {
+                        top[j] = y;
+                        int bi = rs.slotBoxes.indexOf(vis.get(j));
+                        y -= rs.slotHeight(bi) + GAP;
+                    }
+                    // 插入索引（含预览槽共 n+1 位，0..n）
+                    int ins = 0;
+                    for (int j = 0; j < n; j++) {
+                        int bi = rs.slotBoxes.indexOf(vis.get(j));
+                        float center = top[j] - rs.slotHeight(bi) / 2f;
+                        if (sy > center) { ins = j; break; }
+                        ins = j + 1;
+                    }
+                    ins = Mathf.clamp(ins, 0, n);
+                    float previewBottom = 0f;
+                    if (ins >= n) {
+                        // 追加到最下方：各框不动，灰色框紧贴最后一个白框下方
+                        int lb = rs.slotBoxes.indexOf(vis.get(n - 1));
+                        float lastBottom = top[n - 1] - rs.slotHeight(lb);
+                        previewBottom = lastBottom - MARGIN - BTN_H;
+                        placeVisByTop(vis, top);
+                    } else if (ins == 0) {
+                        // 插到最顶部之上：白框不动，灰色框紧贴在最顶白框上方（留 MARGIN 间隙）。
+                        // 原实现把整叠白框下移 BTN_H+MARGIN，但白框自身高度大于该移动量，
+                        // 下移后的白框会覆盖住灰色框（与内部按钮重叠）——这里改为白框不挪、灰框浮在最上方。
+                        previewBottom = boxBaseTop + MARGIN;
+                        placeVisByTop(vis, top);
+                    } else {
+                        // 两框之间：ins..n-1 下移，使灰色框居中于扩大的间隙
+                        int ui = rs.slotBoxes.indexOf(vis.get(ins - 1));
+                        int li = rs.slotBoxes.indexOf(vis.get(ins));
+                        float upperBottom = top[ins - 1] - rs.slotHeight(ui);
+                        float shift = BTN_H + MARGIN - GAP;
+                        for (int j = ins; j < n; j++) {
+                            top[j] += shift;
+                        }
+                        previewBottom = upperBottom + (GAP + shift - BTN_H) / 2f;
+                        placeVisByTop(vis, top);
+                    }
+                    showHintBox(fixedHintCenterX(), previewBottom, BTN_H, buttonWidth());
+                    if (ghost != null) ghost.toFront();
+                }
 
-                    if (hint != null && Math.abs(hint.y - (y - ph / 2f)) < 1f
-                            && Math.abs(hint.x - (cx - boxW / 2f)) < 1f) return;
+                /** 按各可见白框基准 top(stage) 置位（slotLayer 局部坐标） */
+                private void placeVisByTop(Seq<RegionState.SlotBox> vis, float[] top) {
+                    for (int j = 0; j < vis.size; j++) {
+                        RegionState.SlotBox b = vis.get(j);
+                        int bi = rs.slotBoxes.indexOf(b);
+                        float hh = rs.slotHeight(bi);
+                        b.setPosition(b.x, (top[j] - hh) - slotBase.y);
+                    }
+                }
 
+                /** 把白框还原到基准堆叠（纯 setPosition，不动布局树；配合插入重排后的复原） */
+                private void restoreBoxPristine() {
+                    if (!boxReflowActive) return;
+                    boxReflowActive = false;
+                    if (rs.slotBoxes.size == 0) return;
+                    float y = boxBaseTop;
+                    for (int i = 0; i < rs.slotBoxes.size; i++) {
+                        RegionState.SlotBox b = rs.slotBoxes.get(i);
+                        float hh = rs.slotHeight(i);
+                        b.setPosition(b.x, y - hh - slotBase.y);
+                        y -= hh + 40f;
+                    }
+                }
+
+                /** 还原来源框内按钮到基准位置（离开框内移动或落下前调用） */
+                private void resetInBoxReflow() {
+                    if (!inBoxReflowActive) return;
+                    inBoxReflowActive = false;
+                    if (srcBtnBaseBottoms == null || srcBoxIdx < 0 || srcBoxIdx >= rs.slotBoxes.size) return;
+                    RegionState.SlotBox box = rs.slotBoxes.get(srcBoxIdx);
+                    Seq<Direction> c = rs.slotContents.get(srcBoxIdx);
+                    if (c.size != srcBtnBaseBottoms.length) return;
+                    for (int i = 0; i < c.size; i++) {
+                        Direction d = c.get(i);
+                        Vec2 l = box.content.stageToLocalCoordinates(
+                                Tmp.v1.set(0f, srcBtnBaseBottoms[i]));
+                        d.setPosition(d.x, l.y);
+                    }
+                }
+
+                /** 灰色占位框的水平中心：固定对齐黄色按钮列（stage 坐标），只随鼠标上下移动，水平不动 */
+                private float fixedHintCenterX() {
+                    float x = Direction.this.localToStageCoordinates(Tmp.v1.set(0f, 0f)).x;
+                    return x + Direction.this.getWidth() / 2f;
+                }
+
+                private float buttonWidth() {
+                    float w = Direction.this.getWidth();
+                    return w > 0 ? w : rs.column.getWidth() - 30f;
+                }
+
+                /** 绘制/更新按钮等大灰色占位框（stage 坐标） */
+                private void showHintBox(float centerX, float bottomY, float h, float w) {
+                    if (hint != null && Math.abs(hint.x - (centerX - w / 2f)) < 1f
+                            && Math.abs(hint.y - bottomY) < 1f) return;
                     if (hint != null) hint.remove();
                     hint = new Table();
                     hint.background(Tex.whitePane);
                     hint.setColor(Color.gray);
-                    hint.setSize(boxW, ph);
+                    hint.setSize(w, h);
                     hint.touchable = Touchable.disabled;
-                    hint.setPosition(cx - boxW / 2f, y - ph / 2f);
+                    hint.setPosition(centerX - w / 2f, bottomY);
                     Core.scene.root.addChild(hint);
                     if (ghost != null) ghost.toFront();
                 }
 
-                private void removeHint() {
+                private void clearRootHint() {
                     if (hint != null) {
                         hint.remove();
                         hint = null;
                     }
-                    // 清除所有白框的占位并重建（去掉占位，恢复原始大小）
+                }
+
+                private void removeHint() {
+                    clearRootHint();
+                    // 清除所有白框的占位并重建（逐框复原，去掉占位恢复原大小，不整层重建）
                     for (int i = 0; i < rs.slotBoxes.size; i++) {
                         RegionState.SlotBox b = rs.slotBoxes.get(i);
                         if (b.previewInsert != -1) {
                             b.previewInsert = -1;
                             rs.rebuildSlotContents(i);
+                            rs.setSlotHeight(i);
                         }
                     }
                 }
@@ -868,16 +1119,17 @@ addListener(new InputListener() {
         private boolean dragStart(InputEvent event) {
             if (build == null) return false;
             draggingButton = true;
+            resetDragState();
             ghost = new Table();
             ghost.background(Tex.whitePane);
-            ghost.setColor(color);
+            ghost.setColor(BTN_BORDER);
             ghost.margin(0f);
             ghost.table(Tex.whiteui, t -> {
-                t.color.set(color);
-                t.margin(6f);
+                t.color.set(BTN_FACE);
+                t.margin(12f);
                 t.touchable = Touchable.disabled;
-                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).color(color).padRight(8f);
-            }).growX().height(38f);
+                t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).color(Color.white).growX().center();
+            }).grow().pad(4f);
             ghost.setSize(getWidth(), getHeight());
             ghost.touchable = Touchable.disabled;
             ghost.setPosition(event.stageX - getWidth() / 2f, event.stageY - getHeight() / 2f);
@@ -894,7 +1146,33 @@ addListener(new InputListener() {
                     break;
                 }
             }
+            // 快照白框基准堆叠几何（空白/新建槽位预览用，与整框拖动同口径）
+            if (rs.slotBoxes.size > 0) {
+                boxBaseTop = rs.slotBoxes.get(0).localToStageCoordinates(Tmp.v1.set(0f, 0f)).y
+                        + rs.slotHeight(0);
+                slotBase = rs.slotLayer.localToStageCoordinates(Tmp.v2.set(0f, 0f)).cpy();
+            }
+            // 快照来源框内按钮底边（框内排序预览用）
+            for (int i = 0; i < rs.slotBoxes.size; i++) {
+                if (rs.slotContents.get(i).contains(Direction.this)) {
+                    srcBoxIdx = i;
+                    Seq<Direction> c = rs.slotContents.get(i);
+                    srcBtnBaseBottoms = new float[c.size];
+                    for (int j = 0; j < c.size; j++) {
+                        srcBtnBaseBottoms[j] = c.get(j).localToStageCoordinates(Tmp.v1.set(0f, 0f)).y;
+                    }
+                    break;
+                }
+            }
             return true;
+        }
+
+        /** 清空本轮拖拽的预览状态（新拖拽开始或拖拽结束时） */
+        private void resetDragState() {
+            boxReflowActive = false;
+            inBoxReflowActive = false;
+            srcBoxIdx = -1;
+            srcBtnBaseBottoms = null;
         }
 
         private void clearGhost() {
