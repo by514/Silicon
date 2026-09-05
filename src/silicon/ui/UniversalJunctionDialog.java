@@ -13,6 +13,8 @@ import arc.scene.event.HandCursorListener;
 import arc.scene.event.InputEvent;
 import arc.scene.event.InputListener;
 import arc.scene.event.Touchable;
+import arc.scene.style.BaseDrawable;
+import arc.scene.style.Drawable;
 import arc.scene.ui.*;
 import arc.scene.ui.layout.Table;
 import arc.struct.Seq;
@@ -53,9 +55,21 @@ public class UniversalJunctionDialog extends BaseDialog {
     /** 方向按钮尺寸基准值：红框与白框内一致，保证按钮大小不变 */
     private static final float BTN_W = 140f;
     private static final float BTN_H = 100f;
-    /** 方向按钮配色：亮金内面（不透明）+ 深棕金边框，鲜艳醒目 */
+    /** 方向按钮配色：亮黄色不透明内面 + 深棕金边框（自绘填充，不依赖半透明面板纹理） */
     private static final Color BTN_BORDER = Color.valueOf("8a5a00");
-    private static final Color BTN_FACE = Color.valueOf("ffc107");
+    private static final Color BTN_FACE = Color.valueOf("ffd500");
+    /** 不透明实心填充（无纹理、随元素颜色着色，替代半透明面板纹理）：亮黄按钮不透明的关键 */
+    private static final Drawable SOLID = new BaseDrawable() {
+        @Override
+        public void draw(float x, float y, float w, float h) {
+            Fill.crect(x, y, w, h);
+        }
+
+        @Override
+        public void draw(float x, float y, float originX, float originY, float w, float h, float scaleX, float scaleY, float rotation) {
+            Fill.crect(x, y, w, h);
+        }
+    };
     /** 整框拖拽时灰色落点占位框的高度（基准值） */
     private static final float PLACE_H = 60f;
     /** 按钮拖到空白处时「新建槽位」长条灰框的高度：比按钮(y=52)高，避免内嵌按钮框与大框上下边缘重叠 */
@@ -561,13 +575,13 @@ public class UniversalJunctionDialog extends BaseDialog {
                                     super.draw();
                                 }
                             };
-                            btn.background(Tex.whitePane);
+                            btn.background(SOLID);
                             btn.setColor(BTN_BORDER);
                             btn.margin(0f);
                             btn.touchable = Touchable.disabled;
-                            btn.table(Tex.whitePane, t -> {
+                            btn.table(SOLID, t -> {
                                 t.color.set(BTN_FACE);
-                                t.margin(10f);
+                                t.margin(6f);
                                 t.touchable = Touchable.disabled;
                                 t.add("@universal-junction.dir" + d.dir).style(Styles.outlineLabel).color(Color.white)
                                         .grow().labelAlign(Align.center);
@@ -722,19 +736,18 @@ public class UniversalJunctionDialog extends BaseDialog {
             this.rs = rs;
             this.dir = dir;
 
-            background(Tex.whitePane);
-            setColor(BTN_BORDER);
+            background(SOLID);
+            setColor(BTN_FACE);
             margin(0f);
             touchable = Touchable.enabled;
 
-            table(Tex.whitePane, t -> {
-                t.color.set(BTN_FACE);
+            table(t -> {
                 t.addListener(new HandCursorListener());
-                t.margin(10f);
+                t.margin(6f);
                 t.touchable = Touchable.enabled;
                 t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).name("statement-name")
                         .color(Color.white).grow().labelAlign(Align.center);
-            }).grow().pad(2f);
+            }).grow();
 
             row();
 
@@ -1142,12 +1155,12 @@ addListener(new InputListener() {
             draggingButton = true;
             resetDragState();
             ghost = new Table();
-            ghost.background(Tex.whitePane);
+            ghost.background(SOLID); // 不透明实心填充：tint 成边框色/亮黄
             ghost.setColor(BTN_BORDER);
             ghost.margin(0f);
-            ghost.table(Tex.whitePane, t -> {
+            ghost.table(SOLID, t -> {
                 t.color.set(BTN_FACE);
-                t.margin(10f);
+                t.margin(6f);
                 t.touchable = Touchable.disabled;
                 t.add("@universal-junction.dir" + dir).style(Styles.outlineLabel).color(Color.white)
                         .grow().labelAlign(Align.center);
@@ -1217,8 +1230,11 @@ addListener(new InputListener() {
             float pad = 5f;
             Fill.dropShadow(x + width / 2f, y + height / 2f, width + pad, height + pad, 10f, 0.9f * parentAlpha);
 
-            Draw.color(0, 0, 0, 0.3f * parentAlpha);
+            // 实心绘制（不透明，不受半透明面板纹理影响）：深棕金边框 + 亮黄色核心
+            Draw.color(BTN_BORDER);
             Fill.crect(x, y, width, height);
+            Draw.color(BTN_FACE);
+            Fill.crect(x + 2f, y + 2f, width - 4f, height - 4f);
             Draw.reset();
 
             super.draw();
