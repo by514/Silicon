@@ -50,38 +50,23 @@ public class Changelog {
         new Entry("a0.12.1.0", "dimension-anchor", "修复接收态释放物品按钮失效"),
     };
 
-    private static final String SEEN_KEY = "silicon.changelog.seen";
     /** 方块图标缓存：避免每次弹窗对每个条目重复 Vars.content.blocks() 线性查找 */
     private static final ObjectMap<String, TextureRegion> iconCache = new ObjectMap<>();
 
     /**
-     * 每次启动必弹：
-     * - 存在比「上次见过版本」(seen) 更新的版本时 → 弹该新版本的改动内容；
-     * - 否则（无新版本）→ 弹当前最新版本的改动内容。
+     * 每次启动必弹当前版本的改动内容（供调试方便观察）。
+     * 目标版本 = ≤ 当前版本中的最高版本（ENTRIES 按「旧→新」排列，遍历覆盖即得）。
      */
     public static void checkAndShow() {
         String current = UpdateChecker.currentVersion();
         if (current.isEmpty()) return;
-        String seen = Core.settings.getString(SEEN_KEY, "");
 
-        // 收集所有 ≤ 当前版本的条目（用于确定目标版本；保持 ENTRIES 旧→新顺序）
-        Seq<Entry> valid = new Seq<>();
-        for (Entry e : ENTRIES) {
-            if (UpdateChecker.isNewer(e.version, current)) continue;
-            boolean dup = false;
-            for (Entry p : valid) {
-                if (p.version.equals(e.version)) { dup = true; break; }
-            }
-            if (!dup) valid.add(e);
-        }
-        if (valid.isEmpty()) return;
-
-        // 目标版本：优先取比 seen 新的最高版本；无则取当前最高版本
+        // 取 ≤ 当前版本的最高版本
         String target = null;
-        for (Entry e : valid) {
-            if (seen.isEmpty() || UpdateChecker.isNewer(e.version, seen)) target = e.version;
+        for (Entry e : ENTRIES) {
+            if (!UpdateChecker.isNewer(e.version, current)) target = e.version;
         }
-        if (target == null) target = valid.get(valid.size - 1).version;
+        if (target == null) return;
 
         Seq<Entry> show = new Seq<>();
         for (Entry e : ENTRIES) {
@@ -89,7 +74,6 @@ public class Changelog {
         }
         if (show.isEmpty()) return;
 
-        Core.settings.put(SEEN_KEY, target);
         Core.app.post(() -> showDialog(show));
     }
 

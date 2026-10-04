@@ -93,6 +93,15 @@ public class UniversalJunctionDialog extends BaseDialog {
         this("@universal-junction.title");
     }
 
+    @Override
+    public void hide() {
+        // 全屏布局下：关闭时清理各区域拖拽预览状态，避免残留
+        for (RegionState rs : allRegions) {
+            rs.clearDragPreview();
+        }
+        super.hide();
+    }
+
     public void setup() {
         allRegions.clear(); // shown → setup 可能多次调用：先清空，避免 re-show 时累积陈旧区域状态
         cont.table(grid -> {
@@ -756,9 +765,10 @@ public class UniversalJunctionDialog extends BaseDialog {
                         Direction.this.srcSlotBox = null;
                     }
 
-                    // 还原一切预览重排（白框/框内按钮回基准位），保证后续落点判断基于自然几何
+                    // 还原一切预览重排（白框/框内按钮回基准位），并强制刷新布局，保证后续落点判断基于自然几何
                     restoreBoxPristine();
                     resetInBoxReflow();
+                    rs.slotLayer.invalidateHierarchy();
 
                     // 判定落点
                     RegionState.SlotBox targetSlot = findTargetSlot(sx, sy);

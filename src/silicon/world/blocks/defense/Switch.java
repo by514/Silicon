@@ -36,7 +36,8 @@ public class Switch extends Block {
         group = BlockGroup.logic;
         config(Boolean.class, (building, enabled) -> {
             Building front = building.front();
-            // #28 只允许控制同队建筑
+            // 服务器端执行：目标固定为「本开关正前方」的服务端建筑，客户端无法指定任意目标；
+            // 仅允许控制同队、且非开关的建筑（#28）。
             if (front == null || front.team != building.team || front instanceof SwitchBuild) return;
             // #43 单次状态更新（不持续覆盖），并按该次设置刷新 switch 记忆状态
             front.enabled = enabled;
@@ -99,7 +100,8 @@ public class Switch extends Block {
         @Override
         public void updateTile() {
             super.updateTile();
-            // #43 同步：前方建筑被外部（逻辑处理器等）修改时，跟随其实际状态
+            // #43 同步方向：本块为「状态反映器」——fE 跟随前方建筑的实际 enabled（含外部逻辑处理器改动），
+            // 自身 configure 也写 front 再置 fE；两处都写 front，故 fE 恒等于 front.enabled，无双向竞争。
             Building f = front();
             if (f != null && f.team == team) {
                 if (f.enabled != fE) fE = f.enabled;

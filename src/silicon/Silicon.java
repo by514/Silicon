@@ -496,7 +496,8 @@ public class Silicon extends Mod {
         dialog.show();
     }
 
-    private void handlePauseCommand(Player p, String msg) {        String[] parts = msg.split(" ");
+    private void handlePauseCommand(Player p, String msg) {
+        String[] parts = msg.split(" ");
         if (parts.length < 2) return;
 
         boolean isHost = p.admin || p.name.equals(state.map.author());
