@@ -42,6 +42,7 @@ public class Changelog {
         }
     }
 
+    /** 更新日志条目（版本 → 文案）。顺序无关紧要：checkAndShow 显式按版本比较取 ≤ 当前版本的最高版本。 */
     private static final Entry[] ENTRIES = {
         new Entry("a0.12.2.0", "universal-junction", "配置界面重构：拖拽换位、动态分组、预设与保存"),
         new Entry("a0.12.1.0", "switch", "开关按钮改为切换式（返回式→按下切换开/关）"),

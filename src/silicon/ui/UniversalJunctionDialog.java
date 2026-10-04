@@ -72,7 +72,8 @@ public class UniversalJunctionDialog extends BaseDialog {
         }
     };
     UniversalJunction.UniversalJunctionBuild build;
-    /** 单个黄色按钮正在被拖动时置 true：抑制整框重排的灰色占位框，避免按钮拖拽与整框拖拽互相干扰 */
+    /** 单个黄色按钮正在被拖动时置 true：抑制整框重排的灰色占位框，避免按钮拖拽与整框拖拽互相干扰。
+     * 仅在本对话框的输入事件处理期间生效，属纯 UI 局部状态，不参与网络同步。 */
     boolean draggingButton = false;
     /** 四个输入方向的区域状态，供保存按钮一次性同步全部 */
     private final Seq<RegionState> allRegions = new Seq<>();
