@@ -99,7 +99,7 @@ public class Changelog {
                 // 优先取 mod 方块（silicon-<内部名>），再回退任何其后缀匹配的方块；结果按 item 名缓存
                 TextureRegion icon = iconCache.get(e.item, () -> {
                     Block block = Vars.content.blocks().find(b -> b.name.equals("silicon-" + e.item));
-                    if (block == null) block = Vars.content.blocks().find(b -> b.name.endsWith("-" + e.item));
+                    if (block == null) block = Vars.content.blocks().find(b -> b.name.startsWith("silicon-") && b.name.endsWith("-" + e.item));
                     return block != null ? block.uiIcon : null;
                 });
                 if (icon != null) {

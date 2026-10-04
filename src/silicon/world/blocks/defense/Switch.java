@@ -31,7 +31,6 @@ public class Switch extends Block {
         update = true;
         solid = true;
         sync = true; // 操纵另一端 enabled 的控制块：写读档后 fE 同步（同原版 SwitchBlock）
-//        configurable = true; // 可配置：支持按钮式切换
         rotate = true;
         group = BlockGroup.logic;
         config(Boolean.class, (building, enabled) -> {
@@ -41,7 +40,7 @@ public class Switch extends Block {
             if (front == null || front.team != building.team || front instanceof SwitchBuild) return;
             // #43 单次状态更新（不持续覆盖），并按该次设置刷新 switch 记忆状态
             front.enabled = enabled;
-            if (building instanceof SwitchBuild sb) sb.fE = enabled;
+            ((SwitchBuild) building).fE = enabled; // 回调目标恒为 SwitchBuild 本身
         });
         state = new TextureRegion[2];
     }
@@ -117,19 +116,13 @@ public class Switch extends Block {
             }
         }
 
-//        /**
-//         * 切换式按钮配置界面：按一次切换 front 建筑启用状态并持续保持。
-//         * 按钮尺寸 80×40（与原版开关按钮一致）。
-//         */
         @Override
         public void buildConfiguration(Table table) {
-//            table.button(Core.bundle.get("block.silicon-switch.name"), Styles.flatTogglet, () -> {
             Building front = front();
             if (front != null && front.team == team && !(front instanceof SwitchBuild)) {
                 fE = !fE;
                 configure(fE);
             }
-//            }).checked(fE).size(80f, 40f).pad(4f);
         }
 
         /**
