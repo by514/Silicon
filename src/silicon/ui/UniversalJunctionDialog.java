@@ -976,32 +976,13 @@ public class UniversalJunctionDialog extends BaseDialog {
                     // 去掉被拖按钮后，占位之前的可见按钮数 = previewRow
                     int previewRow = insertIdx - (srcBtn < insertIdx ? 1 : 0);
                     previewRow = Mathf.clamp(previewRow, 0, n - 1);
-
-                    // 槽位顶取基准布局（dragStart 快照），避免被本次重排位移反馈影响
-                    float slotTop = (srcBtnBaseBottoms != null && srcBtnBaseBottoms.length > 0)
-                            ? srcBtnBaseBottoms[0] + BTN_H
-                            : contents.get(0).localToStageCoordinates(Tmp.v1.set(0f, contents.get(0).getHeight())).y;
-                    float pitch = BTN_H + 8f;
-
-                    // 其余（可见）按钮按原序填入除 previewRow 外的各槽位
-                    int v = 0;
-                    Table content = box.content;
-                    for (int row = 0; row < n; row++) {
-                        if (row == previewRow) {
-                            // 该行显示灰色占位（按钮等大，水平固定对齐按钮列，仅随鼠标上下移动）
-                            showHintBox(fixedHintCenterX(),
-                                    slotTop - BTN_H - row * pitch, BTN_H, buttonWidth());
-                            continue;
-                        }
-                        // 找到下一个可见（非被拖）按钮
-                        while (v < n && contents.get(v) == Direction.this) v++;
-                        if (v >= n) break;
-                        Direction d = contents.get(v);
-                        Vec2 l = content.stageToLocalCoordinates(Tmp.v1.set(0f, slotTop - BTN_H - row * pitch));
-                        d.setPosition(d.x, l.y);
-                        v++;
+                    // 用与「拖到其它白框」相同的占位机制给本框插入灰色占位格、由 content 的 layout 实时重排：
+                    // 不再手动 setPosition（会被 content.layout 每帧覆盖 → 按钮不动、灰框与按钮不换位）。
+                    if (box.previewInsert != previewRow) {
+                        box.previewInsert = previewRow;
+                        rs.rebuildSlotContents(idx);
+                        rs.setSlotHeight(idx);
                     }
-                    // 说明：被拖按钮自身保持 visible=false（占位 row 显示灰色框），stay 原位
                     if (ghost != null) ghost.toFront();
                 }
 
@@ -1099,15 +1080,12 @@ public class UniversalJunctionDialog extends BaseDialog {
                 private void resetInBoxReflow() {
                     if (!inBoxReflowActive) return;
                     inBoxReflowActive = false;
-                    if (srcBtnBaseBottoms == null || srcBoxIdx < 0 || srcBoxIdx >= rs.slotBoxes.size) return;
+                    if (srcBoxIdx < 0 || srcBoxIdx >= rs.slotBoxes.size) return;
                     RegionState.SlotBox box = rs.slotBoxes.get(srcBoxIdx);
-                    Seq<Direction> c = rs.slotContents.get(srcBoxIdx);
-                    if (c.size != srcBtnBaseBottoms.length) return;
-                    for (int i = 0; i < c.size; i++) {
-                        Direction d = c.get(i);
-                        Vec2 l = box.content.stageToLocalCoordinates(
-                                Tmp.v1.set(0f, srcBtnBaseBottoms[i]));
-                        d.setPosition(d.x, l.y);
+                    if (box.previewInsert >= 0) {
+                        box.previewInsert = -1;
+                        rs.rebuildSlotContents(srcBoxIdx);
+                        rs.setSlotHeight(srcBoxIdx);
                     }
                 }
 
