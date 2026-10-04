@@ -701,6 +701,23 @@ public class UniversalJunctionDialog extends BaseDialog {
                 ph.touchable = Touchable.disabled;
                 return ph;
             }
+
+            /** 就地把 content 的 cells/children 调整为给定按钮顺序（不 detach，避免打断持触摸焦点的被拖按钮）。 */
+            void applyContentOrder(Seq<Direction> order) {
+                Seq<Cell> cs = content.getCells();
+                Seq<Element> ch = content.getChildren();
+                Seq<Cell> oc = new Seq<>();
+                Seq<Element> och = new Seq<>();
+                for (Direction d : order) {
+                    for (int k = 0; k < cs.size; k++) if (cs.get(k).get() == d) { oc.add(cs.get(k)); break; }
+                    if (ch.contains(d, true)) och.add(d);
+                }
+                for (int k = 0; k < cs.size; k++) if (!oc.contains(cs.get(k), true)) oc.add(cs.get(k));
+                for (int k = 0; k < ch.size; k++) if (!och.contains(ch.get(k), true)) och.add(ch.get(k));
+                cs.clear(); cs.addAll(oc);
+                ch.clear(); ch.addAll(och);
+                content.invalidateHierarchy();
+            }
         }
     }
 
@@ -976,13 +993,17 @@ public class UniversalJunctionDialog extends BaseDialog {
                     // 去掉被拖按钮后，占位之前的可见按钮数 = previewRow
                     int previewRow = insertIdx - (srcBtn < insertIdx ? 1 : 0);
                     previewRow = Mathf.clamp(previewRow, 0, n - 1);
-                    // 用与「拖到其它白框」相同的占位机制给本框插入灰色占位格、由 content 的 layout 实时重排：
-                    // 不再手动 setPosition（会被 content.layout 每帧覆盖 → 按钮不动、灰框与按钮不换位）。
-                    if (box.previewInsert != previewRow) {
-                        box.previewInsert = previewRow;
-                        rs.rebuildSlotContents(idx);
-                        rs.setSlotHeight(idx);
-                    }
+                    // 就地重排 content 的 cells/children（不 detach）：被拖按钮移到 previewRow 行、其 cell 留空显示间隙。
+                    // 不手动 setPosition（会被 content.layout 每帧覆盖 → 按钮不动不换位）；
+                    // 也不 rebuildSlotContents（会 detach 被拖按钮 → 触发合成 touchUp 提前放置）。
+                    Seq<Direction> order = new Seq<>();
+                    for (int i = 0; i < n; i++) if (contents.get(i) != Direction.this) order.add(contents.get(i));
+                    order.insert(previewRow, Direction.this);
+                    box.applyContentOrder(order);
+                    // 灰色占位框画在 previewRow 行位置（按钮等大）
+                    float slotTop = box.content.localToStageCoordinates(Tmp.v1.set(0f, box.content.getHeight())).y;
+                    float pitch = BTN_H + 8f;
+                    showHintBox(fixedHintCenterX(), slotTop - BTN_H - previewRow * pitch, BTN_H, buttonWidth());
                     if (ghost != null) ghost.toFront();
                 }
 
@@ -1082,11 +1103,8 @@ public class UniversalJunctionDialog extends BaseDialog {
                     inBoxReflowActive = false;
                     if (srcBoxIdx < 0 || srcBoxIdx >= rs.slotBoxes.size) return;
                     RegionState.SlotBox box = rs.slotBoxes.get(srcBoxIdx);
-                    if (box.previewInsert >= 0) {
-                        box.previewInsert = -1;
-                        rs.rebuildSlotContents(srcBoxIdx);
-                        rs.setSlotHeight(srcBoxIdx);
-                    }
+                    // 还原 content 顺序为原始按钮顺序（就地，不 detach）
+                    box.applyContentOrder(rs.slotContents.get(srcBoxIdx));
                 }
 
                 /** 灰色占位框的水平中心：固定对齐黄色按钮列（stage 坐标），只随鼠标上下移动，水平不动 */
