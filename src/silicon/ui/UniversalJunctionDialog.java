@@ -95,7 +95,12 @@ public class UniversalJunctionDialog extends BaseDialog {
 
     @Override
     public void hide() {
-        // 全屏布局下：关闭时清理各区域拖拽预览状态，避免残留
+        // 关闭时先把最新布局写回权重并 configure 到方块（拖拽后直接点「返回」也能落盘），再清理预览状态
+        if (build != null) {
+            for (RegionState rs : allRegions) {
+                rs.syncWeights();
+            }
+        }
         for (RegionState rs : allRegions) {
             rs.clearDragPreview();
         }

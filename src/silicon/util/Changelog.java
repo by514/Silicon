@@ -61,10 +61,11 @@ public class Changelog {
         String current = UpdateChecker.currentVersion();
         if (current.isEmpty()) return;
 
-        // 取 ≤ 当前版本的最高版本
+        // 取 ≤ 当前版本的最高版本（显式按版本比较，不依赖 ENTRIES 的排列顺序）
         String target = null;
         for (Entry e : ENTRIES) {
-            if (!UpdateChecker.isNewer(e.version, current)) target = e.version;
+            if (UpdateChecker.isNewer(e.version, current)) continue;
+            if (target == null || UpdateChecker.isNewer(target, e.version)) target = e.version;
         }
         if (target == null) return;
 
@@ -97,11 +98,16 @@ public class Changelog {
 
             list.table(row -> {
                 // 优先取 mod 方块（silicon-<内部名>），再回退任何其后缀匹配的方块；结果按 item 名缓存
-                TextureRegion icon = iconCache.get(e.item, () -> {
+                TextureRegion icon = iconCache.get(e.item);
+                if (icon == null) {
                     Block block = Vars.content.blocks().find(b -> b.name.equals("silicon-" + e.item));
                     if (block == null) block = Vars.content.blocks().find(b -> b.name.startsWith("silicon-") && b.name.endsWith("-" + e.item));
-                    return block != null ? block.uiIcon : null;
-                });
+                    // 未命中就不入缓存，避免内容尚未加载时把 null 永久缓存
+                    if (block != null && block.uiIcon != null) {
+                        icon = block.uiIcon;
+                        iconCache.put(e.item, icon);
+                    }
+                }
                 if (icon != null) {
                     row.image(icon).size(48f * scl).padRight(10f).padTop(2f);
                 }

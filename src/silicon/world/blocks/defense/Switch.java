@@ -79,6 +79,7 @@ public class Switch extends Block {
     }
 
     public class SwitchBuild extends Building {
+        /** 状态镜像：与前方建筑 enabled 保持一致（configure 回调与 updateTile 都只写 front，再同步到此）。 */
         boolean fE;
         @Override
         public void drawSelect() {
@@ -109,19 +110,9 @@ public class Switch extends Block {
 
         @Override
         public void tapped() {
-            // #28 同队校验：单次切换，不持续覆盖外部逻辑
+            // #28 同队校验：仅发起配置请求，fE 由服务器端 config 回调统一回写（不做客户端乐观改值）
             if (front() != null && front().team == team && !(front() instanceof SwitchBuild)) {
-                fE = !fE;
-                configure(fE);
-            }
-        }
-
-        @Override
-        public void buildConfiguration(Table table) {
-            Building front = front();
-            if (front != null && front.team == team && !(front instanceof SwitchBuild)) {
-                fE = !fE;
-                configure(fE);
+                configure(!fE);
             }
         }
 
