@@ -17,10 +17,9 @@ import mindustry.ui.dialogs.BaseDialog;
 import mindustry.world.Block;
 
 /**
- * 模组更新日志：每次启动必弹（供调试方便观察）。
+ * 模组更新日志：仅在「当前版本号」与「上次见过版本」不同时弹窗（更新日志的常规语义）。
  * <p>
- * - 存在比「上次见过版本」(seen) 更新的条目 → 弹新版本日志；
- * - 否则 → 弹上次见过的版本日志。
+ * 弹窗内容为「≤ 当前版本的最高版本」对应的全部条目；弹过后记录当前版本，避免每次启动重复弹出。
  * <p>
  * 每条以黄线分隔，从左到右：物品贴图 | 物品名字 | 改动内容（自动换行）。
  */
@@ -51,6 +50,8 @@ public class Changelog {
         new Entry("a0.12.1.0", "dimension-anchor", "修复接收态释放物品按钮失效"),
     };
 
+    /** 上次弹过更新日志的版本号（与当前版本相同则不再弹） */
+    private static final String SEEN_KEY = "silicon.changelog.seen";
     /** 方块图标缓存：避免每次弹窗对每个条目重复 Vars.content.blocks() 线性查找 */
     private static final ObjectMap<String, TextureRegion> iconCache = new ObjectMap<>();
 
@@ -61,6 +62,8 @@ public class Changelog {
     public static void checkAndShow() {
         String current = UpdateChecker.currentVersion();
         if (current.isEmpty()) return;
+        // 常规更新日志语义：仅版本号变化时弹（避免每次启动都弹同一版本）
+        if (current.equals(Core.settings.getString(SEEN_KEY, ""))) return;
 
         // 取 ≤ 当前版本的最高版本（显式按版本比较，不依赖 ENTRIES 的排列顺序）
         String target = null;
@@ -76,6 +79,7 @@ public class Changelog {
         }
         if (show.isEmpty()) return;
 
+        Core.settings.put(SEEN_KEY, current);
         Core.app.post(() -> showDialog(show));
     }
 

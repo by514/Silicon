@@ -81,8 +81,8 @@ public class Silicon extends Mod {
         Events.on(EventType.ClientLoadEvent.class, e -> {
             MOD = mods.getMod(Silicon.class);
             if (MOD != null) MOD.meta.subtitle = MOD.meta.version;
+            silicon.util.Changelog.checkAndShow();
         });
-        Events.on(EventType.ClientLoadEvent.class, e -> silicon.util.Changelog.checkAndShow());
     }
 
     @Override

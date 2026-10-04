@@ -14,6 +14,7 @@ import arc.util.io.Writes;
 import mindustry.Vars;
 import mindustry.entities.units.BuildPlan;
 import mindustry.gen.Building;
+import mindustry.gen.Sounds;
 import mindustry.gen.Unit;
 import mindustry.graphics.Drawf;
 import mindustry.world.Block;
@@ -31,6 +32,8 @@ public class Switch extends Block {
         update = true;
         solid = true;
         sync = true; // 操纵另一端 enabled 的控制块：写读档后 fE 同步（同原版 SwitchBlock）
+        // configurable 故意保持 false：InputHandler 在 configurable=true 时会把该点击标记为已消费（consumed=true），
+        // 使 tapped() 不再被调用（其 !consumed 守卫）。本方块靠 tapped()+configure() 切换，故不能开启 configurable。
         rotate = true;
         group = BlockGroup.logic;
         config(Boolean.class, (building, enabled) -> {
@@ -112,6 +115,7 @@ public class Switch extends Block {
         public void tapped() {
             // #28 同队校验：仅发起配置请求，fE 由服务器端 config 回调统一回写（不做客户端乐观改值）
             if (front() != null && front().team == team && !(front() instanceof SwitchBuild)) {
+                Sounds.click.at(this);
                 configure(!fE);
             }
         }
